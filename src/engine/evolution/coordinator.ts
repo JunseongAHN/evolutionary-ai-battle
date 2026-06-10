@@ -166,18 +166,23 @@ function battleProcess() {
 
     process.on('message', (msg) => {
         try {
-            const bot1 = new Bot(1);
+            const bot1 = new Bot(1, 'team-a');
             const genome1 = Genome.loadFromJSON(msg.genomes[0]);
             bot1.loadGenome(genome1);
+            const bot1Teammate = new Bot(2, 'team-a');
+            bot1Teammate.loadGenome(Genome.loadFromJSON(msg.genomes[0]));
 
             // Bot 2 just does random stuff
-            const bot2 = new Bot(2);
+            const bot2 = new Bot(3, 'team-b');
             const genome2 = Genome.loadFromJSON(msg.genomes[1]);
             bot2.loadGenome(genome2);
             bot2.selectAIMethod(msg.totalGenerations);
+            const bot2Teammate = new Bot(4, 'team-b');
+            bot2Teammate.loadGenome(Genome.loadFromJSON(msg.genomes[1]));
+            bot2Teammate.selectAIMethod(msg.totalGenerations);
 
             const battleground = new Battleground()
-            battleground.addBots(bot1, bot2);
+            battleground.addBots(bot1, bot1Teammate, bot2, bot2Teammate);
             battleground.start((results) => {
                 process.send({
                     type: 'results',

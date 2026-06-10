@@ -28,13 +28,20 @@ const MAX_SPEED = config.maxSpeed;
 const STARTING_LIVES = config.startingLives;
 
 class Bot {
-    constructor(id, view = null) {
+    constructor(id, teamId, view = null) {
         this.id = id;
+        this.teamId = teamId;
         this.view = view;
-        const poseNum = this.id - 1;
-        this.xPos = Math.floor(Math.random() * config.botStartPoses[poseNum].xPos.max + config.botStartPoses[poseNum].xPos.min);
-        this.yPos = Math.floor(Math.random() * config.botStartPoses[poseNum].yPos.max + config.botStartPoses[poseNum].yPos.min);
-        this.rotation = Math.floor(Math.random() * config.botStartPoses[poseNum].rotation.max + config.botStartPoses[poseNum].rotation.min);
+        const poseNum = this.teamId === 'team-a' ? 0 : 1;
+        const pose = config.botStartPoses[poseNum];
+        const spawnVariant = (this.id - 1) % 2;
+        const yHalf = pose.yPos.min + ((pose.yPos.max - pose.yPos.min) / 2);
+        const yMin = spawnVariant === 0 ? pose.yPos.min : yHalf;
+        const yMax = spawnVariant === 0 ? yHalf : pose.yPos.max;
+        const rotationRange = pose.rotation.max - pose.rotation.min;
+        this.xPos = Math.floor(Math.random() * (pose.xPos.max - pose.xPos.min) + pose.xPos.min);
+        this.yPos = Math.floor(Math.random() * (yMax - yMin) + yMin);
+        this.rotation = Math.floor(Math.random() * rotationRange + pose.rotation.min);
         if (this.rotation < 0) this.rotation += 360;
         this.bullets = [];
         this.lives = STARTING_LIVES;

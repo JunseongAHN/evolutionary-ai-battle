@@ -340,7 +340,10 @@ export default class Trainer {
         let botFitness = totalGenerations;
         /* Give the bot 20 points of fitness for each life it took off the opponent */
         botFitness +=  ((5 - results.bot2.lives) * 20);
-        if (results.winner == 1) {
+        const bot1Won = results.winnerTeamId
+            ? results.winnerTeamId === results.bot1.teamId
+            : results.winner == 1;
+        if (bot1Won) {
             /* If the bot won it gets bonus fitness the quicker it won */
             botFitness += maxRoundTime - Math.min(maxRoundTime, Math.floor(results.totalTime));
             /* The bot gets 10 fitness points for each life it had left at the end */

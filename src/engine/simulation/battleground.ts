@@ -8,6 +8,7 @@
 import { distanceBetweenPoints } from '../../shared/math';
 import config from '../../../config/default.json'
 import log from '../../shared/logger'
+import { getAliveBots, getAliveTeamIds, isEnemy } from './teams'
 
 const TICK_TIME = config.tickTime;
 const BOT_RADIUS = config.botSize / 2;
@@ -34,7 +35,7 @@ class Battleground {
         this.winner = null;
         this.lastActionTime = null;
         this.lastBotMoveTime = null;
-        this.lastShootTime = [Date.now(), Date.now()];
+        this.lastShootTime = [];
     }
 
     /**
@@ -42,9 +43,9 @@ class Battleground {
      * @param {Bot} bot1 
      * @param {Bot} bot2 
      */
-    addBots(bot1, bot2) {
-        this.bots.push(bot1)
-        this.bots.push(bot2)
+    addBots(...bots) {
+        this.bots.push(...bots)
+        this.lastShootTime = this.bots.map(() => Date.now());
     }
 
     /**
@@ -83,11 +84,19 @@ class Battleground {
             endTime: this.endTime,
             totalTime,
             winner: this.winner,
+            winnerTeamId: this.winner,
+            bots: this.bots.map((bot) => ({
+                id: bot.id,
+                teamId: bot.teamId,
+                lives: bot.lives
+            })),
             bot1: {
-                lives: this.bots[0].lives
+                lives: this.bots[0].lives,
+                teamId: this.bots[0].teamId
             },
             bot2: {
-                lives: this.bots[1].lives
+                lives: this.bots[2].lives,
+                teamId: this.bots[2].teamId
             }
         };
         this.onEnd(results);
@@ -123,11 +132,19 @@ class Battleground {
      * performed an action so that if it stops doing anything for a while the battlefield ends.  
      */
     updateBots() {
-        this.botActions[0] = this.updateBot(this.bots[0], this.bots[1]);
-        this.botActions[1] = this.updateBot(this.bots[1], this.bots[0]);
+        if (this.view && typeof this.view.setBots === 'function') {
+            this.view.setBots(this.bots);
+        }
+        this.bots.forEach((bot, index) => {
+            const nearestEnemy = this.getNearestEnemy(bot);
+            this.botActions[index] = bot.lives > 0 && nearestEnemy
+                ? this.updateBot(bot, nearestEnemy)
+                : { dx: 0, dy: 0, dh: 0, ds: false };
+        });
         if (this.botDidActions(this.botActions[0])) {
             this.lastActionTime = Date.now()
         }
+        this.checkForWinner();
         if ((Date.now() - this.lastActionTime) / 1000 > NO_ACTION_TIMEOUT) {
             this.end();
         }
@@ -173,7 +190,9 @@ class Battleground {
         for (var i = 0; i < this.bots.length; i++) {
             const bot = this.bots[i];
             const botActions = this.botActions[i];
-            const otherBot = i == 0 ? this.bots[1] : this.bots[0];
+            if (bot.lives <= 0 || !botActions) {
+                continue;
+            }
 
             const xMovement = Math.max(Math.min(botActions.dx, MAX_SPEED), -MAX_SPEED) * delta * moveSpeedMultiplier;
             const yMovement = Math.max(Math.min(botActions.dy, MAX_SPEED), -MAX_SPEED) * delta * moveSpeedMultiplier;
@@ -208,15 +227,16 @@ class Battleground {
                     bullet.dead = true
                 }
 
-                if (distanceBetweenPoints(bullet.xPos, bullet.yPos, otherBot.xPos, otherBot.yPos) < (BULLET_RADIUS + BOT_RADIUS)) {
-                    otherBot.lives -= 1;
-                    log.debug("Bot " + otherBot.id + " hit! Now has " + otherBot.lives + " lives left.");
-                    if (otherBot.lives <= 0) {
-                        this.winner = bot.id;
-                        return this.end();
-                    }
-                    bullet.dead = true;
-                }
+                const hitEnemy = getAliveBots(this.bots).find((otherBot) => {
+                    return isEnemy(bot, otherBot)
+                        && distanceBetweenPoints(bullet.xPos, bullet.yPos, otherBot.xPos, otherBot.yPos) < (BULLET_RADIUS + BOT_RADIUS);
+                });
+                if (!hitEnemy) return;
+
+                hitEnemy.lives -= 1;
+                log.debug("Bot " + hitEnemy.id + " hit! Now has " + hitEnemy.lives + " lives left.");
+                bullet.dead = true;
+                this.checkForWinner();
             });
 
             bot.bullets = bot.bullets.filter(function (bullet) { return !bullet.dead; });
@@ -238,6 +258,25 @@ class Battleground {
     draw() {
         if (this.view) {
             this.view.drawBattleground(this.bots);
+        }
+    }
+
+    getNearestEnemy(bot) {
+        return getAliveBots(this.bots)
+            .filter((otherBot) => isEnemy(bot, otherBot))
+            .reduce((nearestEnemy, enemy) => {
+                if (!nearestEnemy) return enemy;
+                const nearestDistance = distanceBetweenPoints(bot.xPos, bot.yPos, nearestEnemy.xPos, nearestEnemy.yPos);
+                const enemyDistance = distanceBetweenPoints(bot.xPos, bot.yPos, enemy.xPos, enemy.yPos);
+                return enemyDistance < nearestDistance ? enemy : nearestEnemy;
+            }, null);
+    }
+
+    checkForWinner() {
+        const aliveTeamIds = getAliveTeamIds(this.bots);
+        if (aliveTeamIds.length === 1) {
+            this.winner = aliveTeamIds[0];
+            this.end();
         }
     }
 
