@@ -28,6 +28,53 @@ async function filterAsync(array, callbackfn) {
   return array.filter((value, index) => filterMap[index]);
 }
 
+function getLatestGeneration(files) {
+  const genNumMatch = /generation-([0-9]+)-species/;
+  return files.reduce((latestGeneration, file) => {
+    const match = file.match(genNumMatch);
+    if (!match) {
+      return latestGeneration;
+    }
+
+    const generationNumber = parseInt(match[1], 10);
+    if (Number.isNaN(generationNumber)) {
+      return latestGeneration;
+    }
+
+    if (latestGeneration === null || generationNumber > latestGeneration) {
+      return generationNumber;
+    }
+
+    return latestGeneration;
+  }, null);
+}
+
+function getLatestGenerationFile(files) {
+  const genNumMatch = /generation-([0-9]+)-species/;
+  return files.reduce((latestFile, file) => {
+    const match = file.match(genNumMatch);
+    if (!match) {
+      return latestFile;
+    }
+
+    const generationNumber = parseInt(match[1], 10);
+    if (Number.isNaN(generationNumber)) {
+      return latestFile;
+    }
+
+    if (!latestFile) {
+      return file;
+    }
+
+    const latestGenerationNumber = parseInt(latestFile.match(genNumMatch)[1], 10);
+    if (generationNumber > latestGenerationNumber) {
+      return file;
+    }
+
+    return latestFile;
+  }, null);
+}
+
 router
   .get('/species', async (ctx) => {
     const folders = await fs.readdir(speciesFolder);
@@ -38,15 +85,7 @@ router
     const result = foldersWithFiles.map(async (folder) => { 
       const folderStats = await fs.stat(p.join(speciesFolder, folder)); 
       const files = await fs.readdir(p.join(speciesFolder, folder));
-      const genNumMatch = new RegExp(/generation-([0-9]+)-species/);
-      const latestGeneration = files.reduce((prev, curr) => {
-        const currMatch = curr.match(genNumMatch);
-        const currGenerationNumber = currMatch[1];
-        if (prev > parseInt(currGenerationNumber)) {
-          return prev;
-        }
-        return currGenerationNumber;
-      });
+      const latestGeneration = getLatestGeneration(files);
       return {
         id: folder,
         lastUpdate: folderStats.mtime,
@@ -64,19 +103,14 @@ router
     console.log(`Species id: ${speciesId}`)
     const files = await fs.readdir(p.join(speciesFolder, speciesId));
     console.log("Total Files: ", files.length)
-    const genNumMatch = new RegExp(/generation-([0-9]+)-species/);
-    const latestGeneration = files.reduce((prev, curr) => {
-      const prevMatch = prev.match(genNumMatch);
-      const prevGenerationNumber = prevMatch[1];
-      const currMatch = curr.match(genNumMatch);
-      const currGenerationNumber = currMatch[1];
-      if (parseInt(prevGenerationNumber) > parseInt(currGenerationNumber)) {
-        return prev;
-      }
-      return curr;
-    });
-    console.log("Latest generation is: ", latestGeneration)
-    const latestGenerationSpeciesJSON = await fs.readFile(p.join(speciesFolder, speciesId, latestGeneration));
+    const latestGenerationFile = getLatestGenerationFile(files);
+    if (!latestGenerationFile) {
+      ctx.status = 404;
+      ctx.body = { error: "No training data found for this species" };
+      return;
+    }
+    console.log("Latest generation is: ", latestGenerationFile)
+    const latestGenerationSpeciesJSON = await fs.readFile(p.join(speciesFolder, speciesId, latestGenerationFile));
     ctx.body = JSON.parse(latestGenerationSpeciesJSON);
     console.log("Response is: ", ctx.response)
   })
