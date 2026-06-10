@@ -1,6 +1,8 @@
 let debugLogger = function(){};
 
-if (process.env.DEBUG) {
+const hasProcess = typeof process !== 'undefined' && process && process.env;
+
+if (hasProcess && process.env.DEBUG) {
   debugLogger = console.log;
 }
 
