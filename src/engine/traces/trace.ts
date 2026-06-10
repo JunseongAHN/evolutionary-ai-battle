@@ -1,6 +1,8 @@
 // Represents a recorded sequence of simulation events for later evaluation.
 export default class Trace {
-    constructor(events = []) {
+    events: unknown[];
+
+    constructor(events: unknown[] = []) {
         this.events = events;
     }
 }

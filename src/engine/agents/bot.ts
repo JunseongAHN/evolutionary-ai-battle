@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * This class controls the bots actions. It takes in the world state from the battleground each tick, 
  * and responds with the actions the bot is going to take in that tick. 

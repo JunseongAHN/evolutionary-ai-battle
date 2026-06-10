@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * This is a singleton class that returns an innovation number for a new gene 
  * Innovation numbers are used to keep track of genes when they are passed from 

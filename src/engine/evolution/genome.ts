@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * The genome is the main neural network for the bots. It has many neurons and genes (links between
  * neurons). 

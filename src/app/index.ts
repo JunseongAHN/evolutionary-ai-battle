@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * This is the main file for the browser based trainer. It imports the battleground and bots and 
  * play bots against each other one round at a time. 

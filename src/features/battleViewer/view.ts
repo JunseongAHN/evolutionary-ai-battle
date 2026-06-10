@@ -12,7 +12,7 @@ function scaleForBrainView(value) {
 export function createBattleViewer() {
     return {
         drawBattleground(bots) {
-            const canvas = document.getElementById('battleground');
+            const canvas = document.getElementById('battleground') as HTMLCanvasElement | null;
             if (!canvas || !canvas.getContext) return;
 
             const ctx = canvas.getContext('2d');
@@ -50,7 +50,7 @@ export function createBattleViewer() {
         },
 
         drawBrain(bot, translatedPositions) {
-            const canvas = document.getElementById('bot' + bot.id + 'brain');
+            const canvas = document.getElementById('bot' + bot.id + 'brain') as HTMLCanvasElement | null;
             if (!canvas || !canvas.getContext) return;
 
             const ctx = canvas.getContext('2d');

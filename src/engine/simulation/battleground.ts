@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * The battleground class controls the updating and drawing of an invidual battle between bots. 
  * 

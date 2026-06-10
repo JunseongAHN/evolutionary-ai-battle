@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * The trainer holds all the species and genomes inside those species. 
  * It handles keeping track of the fitnesses of each genome, eliminating those that 
