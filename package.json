@@ -8,7 +8,7 @@
   },
   "main": "src/index.js",
   "scripts": {
-    "start": "npm run compile-browser >/dev/null && node server.js",
+    "start": "npm run compile-browser && node server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "compile-browser": "npx webpack --mode production",
     "compile-node": "npx babel -d dist/ src",
