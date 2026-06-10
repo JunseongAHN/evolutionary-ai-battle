@@ -1,18 +1,58 @@
-import Trace from './trace';
+import {
+    createEmptyTrajectory,
+    createDefaultDecisionReason,
+    PlayerStepRecord,
+    Trajectory,
+    TrajectoryMetadata,
+    TrajectoryResult,
+    TrajectoryStep
+} from './trace';
 
-// Collects simulation events without interpreting or scoring them.
 export default class TraceRecorder {
-    events: unknown[];
+    private trajectory: Trajectory | null;
 
     constructor() {
-        this.events = [];
+        this.trajectory = null;
     }
 
-    record(event: unknown) {
-        this.events.push(event);
+    startTrajectory(metadata: TrajectoryMetadata) {
+        this.trajectory = createEmptyTrajectory(metadata);
     }
 
-    createTrace() {
-        return new Trace(this.events.slice());
+    recordStep(step: number, timeMs: number, playerRecords: PlayerStepRecord[]) {
+        if (!this.trajectory) return;
+
+        const stepRecord: TrajectoryStep = {
+            step,
+            timeMs,
+            players: playerRecords.map((playerRecord) => ({
+                ...playerRecord,
+                reason: playerRecord.reason || createDefaultDecisionReason()
+            }))
+        };
+
+        this.trajectory.steps.push(stepRecord);
+    }
+
+    finishTrajectory(result: TrajectoryResult) {
+        if (!this.trajectory) return;
+        this.trajectory.result = result;
+    }
+
+    getTrajectory() {
+        return this.trajectory ? {
+            ...this.trajectory,
+            steps: this.trajectory.steps.map((step) => ({
+                ...step,
+                players: step.players.map((player) => ({
+                    ...player,
+                    reason: player.reason || createDefaultDecisionReason()
+                }))
+            }))
+        } : null;
+    }
+
+    reset() {
+        this.trajectory = null;
     }
 }

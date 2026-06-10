@@ -11,9 +11,9 @@
  *  - Take the output layer of the neural network and make decisions based on that
  */
 
-import { translateMatrix, rotateAroundPoint, degreesToRadians } from '../../shared/math';
 import Genome from '../evolution/genome';
 import config from '../../../config/default.json';
+import { createBotBrainInputState } from './botPerception';
 const debug = require("debug")("eai:bot");
 
 import {
@@ -21,17 +21,13 @@ import {
     INPUT_NEURONS,
 } from '../../shared/constants'
 
-const MAP_WIDTH = config.mapWidth;
-const MAP_HEIGHT = config.mapHeight;
-const NN_SQUARE_SIZE = config.neuralNetworkSquareSize;
 const MAX_SPEED = config.maxSpeed;
 const STARTING_LIVES = config.startingLives;
 
 class Bot {
-    constructor(id, teamId, view = null) {
+    constructor(id, teamId) {
         this.id = id;
         this.teamId = teamId;
-        this.view = view;
         const poseNum = this.teamId === 'team-a' ? 0 : 1;
         const pose = config.botStartPoses[poseNum];
         const spawnVariant = (this.id - 1) % 2;
@@ -198,9 +194,8 @@ class Bot {
     updateNetwork(inputs) {
         this.updateBotPosition(inputs.xPos, inputs.yPos, inputs.rotation)
         this.otherPlayer = inputs.otherPlayer;
-        const translatedPositions = this.translateObjectPositions(inputs.otherPlayer)
+        const translatedPositions = createBotBrainInputState(this, inputs.otherPlayer);
         this.setInputNeurons(translatedPositions);
-        this.drawBrainView(translatedPositions);
     }
 
     /**
@@ -222,59 +217,6 @@ class Bot {
      * 
      * @param {PlayerInfo} otherPlayer 
      */
-    translateObjectPositions(otherPlayer) {
-        const playerXPos = this.xPos;
-        const playerYPos = this.yPos;
-        const rotationAngle =  degreesToRadians(-this.rotation);
-        const translationMatrix = [MAP_WIDTH - this.xPos, MAP_HEIGHT - this.yPos];
-
-        const otherPlayerRotated = rotateAroundPoint(this.xPos, this.yPos, rotationAngle, [otherPlayer.xPos, otherPlayer.yPos]);
-        const otherPlayerTranslated = translateMatrix(translationMatrix, otherPlayerRotated);
-        const walls = [];
-        for (var i = NN_SQUARE_SIZE / 2; i < MAP_WIDTH; i += NN_SQUARE_SIZE) {
-            walls.push({xPos: i, yPos: -NN_SQUARE_SIZE / 2});
-            walls.push({xPos: i, yPos: MAP_HEIGHT + (NN_SQUARE_SIZE / 2)});
-        }
-        for (var i = NN_SQUARE_SIZE / 2; i < MAP_HEIGHT; i += NN_SQUARE_SIZE) {
-            walls.push({xPos: -NN_SQUARE_SIZE / 2, yPos: i});
-            walls.push({xPos: MAP_WIDTH + (NN_SQUARE_SIZE / 2), yPos: i});
-        }
-         
-        const verticalOffset = this.getVerticalOffset();
-        return {
-            xPos: otherPlayerTranslated[0],
-            yPos: otherPlayerTranslated[1] + verticalOffset,
-            bullets: otherPlayer.bullets.map((bullet) => {
-                const bulletRotated = rotateAroundPoint(playerXPos, playerYPos, rotationAngle, [bullet.xPos, bullet.yPos]);
-                const bulletTranslated = translateMatrix(translationMatrix, bulletRotated);
-                return {
-                    xPos: bulletTranslated[0],
-                    yPos: bulletTranslated[1] + verticalOffset
-                }
-            }),
-            walls: walls.map((wall) => {
-                const wallRotated = rotateAroundPoint(playerXPos, playerYPos, rotationAngle, [wall.xPos, wall.yPos]);
-                const wallTranslated = translateMatrix(translationMatrix, wallRotated);
-                return {
-                    xPos: wallTranslated[0],
-                    yPos: wallTranslated[1] + verticalOffset
-                }
-            })
-        }
-    }
-
-    /** 
-     * Because the battlefield rotates in the bots brain, the brain must be a square whose width is 
-     * the longest axis of the battlefield. If the brain was not square when the bot turns 90 degrees
-     * the entire battlefield wouldn't fit in its brain. 
-     * 
-     * So this function gets the amount that we need to vertically move the translated positions so 
-     * that after translation all positions are positive (nothing has fallen off the top of the screen)
-     */
-    getVerticalOffset() {
-        return MAP_WIDTH - MAP_HEIGHT;
-    }
-
     /**
      * The neural network input layer is a array of size (mapWidth * mapHeight) / nnSquareSize
      * each neuron corrosponds to a grid tile from left to right, top to bottom, where each grid tile
@@ -322,16 +264,6 @@ class Bot {
      **/
     calculateWeights() {
         this.genome.calculateWeights();
-    }
-
-    /** 
-     * Draws a canvas view of what the world looks to the bot. Everything has been moved and rotated
-     * so that it is relative to the bots position and orientation.
-     **/
-    drawBrainView(translatedPositions) {
-        if (this.view) {
-            this.view.drawBrain(this, translatedPositions);
-        }
     }
 
     /**
