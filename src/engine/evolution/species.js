@@ -3,7 +3,7 @@
  * at the end of each generation all AI's only cull and reproduce within their Species. 
  */
 import Genome from "./genome";
-import log from './logger'
+import log from '../../shared/logger'
 
 const MAX_STALE_CHECKS = 15;
 const CROSSOVER_CHANCE = 75;

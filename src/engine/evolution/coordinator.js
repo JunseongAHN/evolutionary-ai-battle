@@ -18,16 +18,16 @@ const fs = require("fs");
 
 const isPrimaryProcess = cluster.isPrimary || cluster.isMaster;
 
-import Bot from './bot'
-import Battleground from './battleground'
-import Trainer from './trainer'
+import Bot from '../agents/bot'
+import Battleground from '../simulation/battleground'
+import Trainer from '../training/trainer'
 import Genome from './genome'
-import log from './logger'
+import log from '../../shared/logger'
 
 /**
  * If you'd like to resume training from an existing species file, uncomment this line
  */
-// import existingSpecies from "../species/SPECIESID/SPECIESID-generation-GENERATION-species.json";
+// import existingSpecies from "../../../species/SPECIESID/SPECIESID-generation-GENERATION-species.json";
 
 /** 
  * On first run of this file cluster.isMaster is true. There is only one master process. 

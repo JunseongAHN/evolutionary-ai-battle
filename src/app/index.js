@@ -3,13 +3,13 @@
  * play bots against each other one round at a time. 
  **/
 import Vue from 'vue/dist/vue.js'
-import Bot from './bot'
-import Battleground from './battleground'
-import Trainer from './trainer'
-import config from '../config/default.json'
-import log from './logger'
+import Bot from '../engine/agents/bot'
+import Battleground from '../engine/simulation/battleground'
+import Trainer from '../engine/training/trainer'
+import { createBattleViewer } from '../features/battleViewer/view'
 
 const trainer = new Trainer();
+const battleViewer = createBattleViewer();
 
 var app = new Vue({
     el: '#evolutionary-ai-battle',
@@ -105,7 +105,7 @@ function battle(existingSpecies) {
     }
 
     /* Bot 1 is the one we're training */
-    const bot1 = new Bot(1);
+    const bot1 = new Bot(1, battleViewer);
     const bot1Genome = trainer.getTopGenome();
     bot1.loadGenome(bot1Genome);
     this.bot1Stats = bot1Genome.getStats();
@@ -114,13 +114,13 @@ function battle(existingSpecies) {
      * Bot 2 picks a random algorithm initially, and after more rounds are completed
      * it starts using genomes for its movement. 
      **/
-    const bot2 = new Bot(2);
+    const bot2 = new Bot(2, battleViewer);
     const bot2Genome = trainer.getTopGenome();
     bot2.loadGenome(bot2Genome);
     bot2.selectAIMethod(trainer.totalGenerations);
     this.bot2Stats = bot2Genome.getStats();
 
-    const battleground = new Battleground()
+    const battleground = new Battleground(battleViewer)
     battleground.addBots(bot1, bot2);
     battleground.start((results) => {
         /* Calculate the bots fitness using the trainer method */

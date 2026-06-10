@@ -8,14 +8,14 @@
 import {
     INPUT_NEURONS,
     OUTPUT_NEURONS,
-} from './constants'
+} from '../../shared/constants'
 
 import {
     sigmoid
-} from './math'
+} from '../../shared/math'
 
 import Innovation from './innovation'
-import config from '../config/default.json'
+import config from '../../../config/default.json'
 const debug = require("debug")("eai:genome");
 
 /**
