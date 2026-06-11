@@ -1,0 +1,36 @@
+{
+  "scenarioId": "self_low_hp",
+  "split": "train",
+  "grid": {
+    "width": 20,
+    "height": 20
+  },
+  "thresholds": {
+    "lowHp": 35,
+    "enemyThreatRange": 5,
+    "supportRange": 4,
+    "isolationRange": 6,
+    "responseWindowSteps": 5
+  },
+  "initialState": {
+    "players": [
+      { "id": "team-a-0", "teamId": "team-a", "positionX": 3, "positionY": 3, "headingX": 1, "headingY": 0, "hp": 22, "alive": true },
+      { "id": "team-a-1", "teamId": "team-a", "positionX": 6, "positionY": 6, "headingX": 1, "headingY": 0, "hp": 100, "alive": true },
+      { "id": "team-b-0", "teamId": "team-b", "positionX": 5, "positionY": 3, "headingX": -1, "headingY": 0, "hp": 100, "alive": true },
+      { "id": "team-b-1", "teamId": "team-b", "positionX": 15, "positionY": 15, "headingX": -1, "headingY": 0, "hp": 100, "alive": true }
+    ]
+  },
+  "gt": {
+    "intent": "retreat_toward_ally",
+    "moveTargetId": "team-a-1",
+    "aimTargetId": "team-b-0",
+    "avoidTargetId": "team-b-0",
+    "fireIntent": true,
+    "expectedReasonLabels": ["retreat", "survive", "regroup"]
+  },
+  "metricDirection": {
+    "damageTaken": "not_increase_much",
+    "survivalSteps": "maintain",
+    "isolationRate": "not_increase_much"
+  }
+}
