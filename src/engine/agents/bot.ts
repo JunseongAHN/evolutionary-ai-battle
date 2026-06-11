@@ -14,6 +14,7 @@
 import Genome from '../evolution/genome';
 import config from '../../../config/default.json';
 import { createBotBrainInputState } from './botPerception';
+import { degreesToRadians } from '../../shared/math';
 const debug = require("debug")("eai:bot");
 
 import {
@@ -23,6 +24,7 @@ import {
 
 const MAX_SPEED = config.maxSpeed;
 const STARTING_LIVES = config.startingLives;
+const NN_SQUARE_SIZE = config.neuralNetworkSquareSize;
 
 class Bot {
     constructor(id, teamId) {

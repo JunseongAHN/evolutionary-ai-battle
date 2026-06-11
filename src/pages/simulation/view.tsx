@@ -1,74 +1,128 @@
-import { battleEnvironmentTemplate } from '../../features/BattleEnvironment/view';
+// @ts-nocheck
+import React from 'react';
+import { useSimulation } from './useSimulation';
 
-const simulationPageTemplate = `
-    <h1>Co-Player Evolution Harness</h1>
-    <div id="loading" v-if="!speciesData && loading">
-        <h1>Loading...</h1>
-    </div>
-    <div id="battle-select" v-if="!speciesData && !loading">
-        <h2>Select Species</h2>
-        <div v-if="!species.length">
-            <p>No trained species are available yet.</p>
-            <p>Run <code>npm run train</code>, then select a generated species.</p>
-        </div>
-        <div v-else v-for="s in species" class="species-card" @click="selectSpecies(s.id)">
-            <div class="container">
-                <h2>{{s.id}}</h2>
-                <p>Total Generations: {{s.latestGeneration}}</p>
-                <p>Last Update: {{s.lastUpdate}}</p>
+function botLabel(botId) {
+    return botId <= 2 ? `Team A - Bot ${botId}` : `Team B - Bot ${botId}`;
+}
+
+function BattleEnvironment({ botIds, prefix, title }) {
+    return (
+        <section className="battle-environment">
+            <h2>{title}</h2>
+            <canvas className="battleground-canvas" id={`${prefix}-battleground`} width="1000" height="500" />
+            <div className="brain-grid">
+                {botIds.map((botId) => (
+                    <div className="brain-board" key={botId}>
+                        <h4>{botLabel(botId)} Brain</h4>
+                        <canvas id={`${prefix}-bot${botId}brain`} width="400" height="400" />
+                    </div>
+                ))}
             </div>
-        </div>
-    </div>
-    <main id="battle" v-if="speciesData">
-        ${battleEnvironmentTemplate}
-        <section class="replay-controls">
-            <button type="button" @click="loadLatestTrajectoryForReplay" :disabled="!latestTrajectory">
-                Load Last Trajectory
-            </button>
-            <button type="button" @click="toggleReplayPlayback" :disabled="!replayTrajectory || !replayTrajectory.steps.length">
-                {{ replayAutoPlay ? 'Pause Replay' : 'Play Replay' }}
-            </button>
-            <button type="button" @click="showLiveBattle" :disabled="displayMode === 'live'">
-                Show Live Battle
-            </button>
-            <label class="replay-slider">
-                <span>Step {{ replayStepIndex }} / {{ replayMaxStep }}</span>
-                <input type="range" min="0" :max="replayMaxStep" step="1" v-model.number="replayStepIndex"
-                    :disabled="!replayTrajectory || !replayTrajectory.steps.length">
-            </label>
         </section>
-        <section id="species-stats">
-            <p>Display: {{ displayMode }}</p>
-            <p>Generation: {{ generation }}</p>
-            <p>Max Fitness: {{ maxFitness }}</p>
-            <h3>Competitor Details</h3>
-            <div class="bot-button-row">
-                <button v-for="botId in [1, 2, 3, 4]" type="button" @click="selectBot(botId)"
-                    :class="{ active: selectedBotId === botId }">Bot {{ botId }}</button>
+    );
+}
+
+function BotDetails({ simulation, replay = false }) {
+    const stats = simulation.selectedStats;
+    const replayPlayer = simulation.selectedReplayPlayer;
+
+    return (
+        <section className="species-stats">
+            <p>Generation: {simulation.generation}</p>
+            <p>Max Fitness: {simulation.maxFitness}</p>
+            <h3>{replay ? 'Replay Competitor Details' : 'Live Competitor Details'}</h3>
+            <div className="bot-button-row">
+                {simulation.botIds.map((botId) => (
+                    <button
+                        className={simulation.selectedBotId === botId ? 'active' : ''}
+                        key={botId}
+                        onClick={() => simulation.setSelectedBotId(botId)}
+                        type="button"
+                    >
+                        Bot {botId}
+                    </button>
+                ))}
             </div>
-            <div class="selected-bot-panel">
-                <h4>{{ botLabel(selectedBotId) }}</h4>
-                <p>Previous Fitness: {{ selectedBotInfo.lastFitness }}</p>
-                <p>Current Fitness: {{ selectedBotInfo.fitness }}</p>
-                <div v-if="displayMode === 'trajectory' && selectedReplayPlayer">
-                    <p>Replay Step: {{ replayStepIndex }}</p>
-                    <p>Action: dx={{ selectedReplayPlayer.action.dx }}, dy={{ selectedReplayPlayer.action.dy }},
-                        dh={{ selectedReplayPlayer.action.dh }}, shoot={{ selectedReplayPlayer.action.ds }}</p>
-                    <p>Reason: {{ selectedReplayPlayer.reason.label }}</p>
-                    <p>HP: {{ selectedReplayPlayer.measurements.hp }}</p>
-                    <p>Position: {{ selectedReplayPlayer.measurements.positionX }}, {{ selectedReplayPlayer.measurements.positionY }}</p>
-                    <p>Nearest Ally: {{ selectedReplayPlayer.measurements.nearestAllyDistance }}</p>
-                    <p>Nearest Enemy: {{ selectedReplayPlayer.measurements.nearestEnemyDistance }}</p>
+            <div className="selected-bot-panel">
+                <h4>{botLabel(simulation.selectedBotId)}</h4>
+                <p>Previous Fitness: {stats.lastFitness ?? 'NEW'}</p>
+                <p>Current Fitness: {stats.fitness ?? 'NEW'}</p>
+                {replay && replayPlayer && (
+                    <>
+                        <p>Replay Step: {simulation.replayStepIndex}</p>
+                        <p>
+                            Action: dx={replayPlayer.action.dx}, dy={replayPlayer.action.dy},
+                            dh={replayPlayer.action.dh}, shoot={String(replayPlayer.action.ds)}
+                        </p>
+                        <p>Reason: {replayPlayer.reason.label}</p>
+                        <p>HP: {replayPlayer.measurements.hp}</p>
+                        <p>Position: {replayPlayer.measurements.positionX}, {replayPlayer.measurements.positionY}</p>
+                        <p>Nearest Ally: {replayPlayer.measurements.nearestAllyDistance}</p>
+                        <p>Nearest Enemy: {replayPlayer.measurements.nearestEnemyDistance}</p>
+                    </>
+                )}
+            </div>
+        </section>
+    );
+}
+
+export function SimulationPage() {
+    const simulation = useSimulation();
+
+    return (
+        <>
+            <h1>Co-Player Evolution Harness</h1>
+            <section id="battle-select">
+                <h2>Select Species</h2>
+                {simulation.loading && <p>Loading species...</p>}
+                {!simulation.loading && !simulation.species.length && (
+                    <p>No trained species are available. Run <code>npm run train</code>.</p>
+                )}
+                <div className="species-list">
+                    {simulation.species.map((species) => (
+                        <button className="species-card" key={species.id} onClick={() => simulation.selectSpecies(species.id)}>
+                            <span className="container">
+                                <strong>{species.id}</strong>
+                                <span>Total Generations: {species.latestGeneration}</span>
+                                <span>Last Update: {species.lastUpdate}</span>
+                            </span>
+                        </button>
+                    ))}
                 </div>
-            </div>
-        </section>
-    </main>
-`;
-
-export function renderSimulationPage(rootId = 'evolutionary-ai-battle') {
-    const root = document.getElementById(rootId);
-    if (!root) {
-        throw new Error(`Simulation page root #${rootId} was not found`);
-    }
-    root.innerHTML = simulationPageTemplate;
+            </section>
+            <main id="battle">
+                <div className="battle-layout">
+                    <BattleEnvironment botIds={simulation.botIds} prefix="live" title="Live Battle" />
+                    <BotDetails simulation={simulation} />
+                </div>
+                <section className="replay-section">
+                    <div className="battle-layout">
+                        <BattleEnvironment botIds={simulation.botIds} prefix="replay" title="Last Trajectory" />
+                        <BotDetails simulation={simulation} replay />
+                    </div>
+                    <section className="replay-controls">
+                        <button onClick={simulation.loadLatestTrajectoryForReplay} disabled={!simulation.latestTrajectory}>
+                            Load Last Trajectory
+                        </button>
+                        <button onClick={simulation.toggleReplayPlayback} disabled={!simulation.replayTrajectory?.steps.length}>
+                            {simulation.replayAutoPlay ? 'Pause Replay' : 'Play Replay'}
+                        </button>
+                        <label className="replay-slider">
+                            <span>Step {simulation.replayStepIndex} / {simulation.replayMaxStep}</span>
+                            <input
+                                type="range"
+                                min="0"
+                                max={simulation.replayMaxStep}
+                                step="1"
+                                value={simulation.replayStepIndex}
+                                disabled={!simulation.replayTrajectory?.steps.length}
+                                onChange={(event) => simulation.setReplayStepIndex(Number(event.target.value))}
+                            />
+                        </label>
+                    </section>
+                </section>
+            </main>
+        </>
+    );
 }

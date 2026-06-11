@@ -70,6 +70,7 @@ class Battleground {
         this.endReason = 'battle_timeout';
         this.traceRecorder.reset();
         this.traceRecorder.startTrajectory(this.createTrajectoryMetadata());
+        this.emitFrame();
         this.updateBots();
         this.updateBotsInterval = setInterval(this.updateBots.bind(this), TICK_TIME);
         this.updateInterval = setInterval(this.update.bind(this), 10);
@@ -168,7 +169,6 @@ class Battleground {
             this.endReason = 'battle_timeout';
             this.end();
         }
-        this.emitFrame();
     }
 
     /**
@@ -267,6 +267,7 @@ class Battleground {
 
         this.recordTrajectoryStep();
         this.checkForWinner();
+        this.emitFrame();
     }
 
     getNearestEnemy(bot) {
