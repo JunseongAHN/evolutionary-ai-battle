@@ -4,42 +4,114 @@ function isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
 
-export function validateTrajectory(raw: unknown): string[] {
+function isString(value: unknown): value is string {
+    return typeof value === 'string' && value.length > 0;
+}
+
+function isNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isBoolean(value: unknown): value is boolean {
+    return typeof value === 'boolean';
+}
+
+function validatePlayerState(state: unknown, path: string, errors: string[]): void {
+    if (!isObject(state)) {
+        errors.push(`${path}.state is required`);
+        return;
+    }
+
+    if (!isNumber(state.positionX)) errors.push(`${path}.state.positionX is required`);
+    if (!isNumber(state.positionY)) errors.push(`${path}.state.positionY is required`);
+    if (!isNumber(state.hp)) errors.push(`${path}.state.hp is required`);
+    if (!isBoolean(state.alive)) errors.push(`${path}.state.alive is required`);
+    if ('headingX' in state && state.headingX !== undefined && !isNumber(state.headingX)) errors.push(`${path}.state.headingX must be a number`);
+    if ('headingY' in state && state.headingY !== undefined && !isNumber(state.headingY)) errors.push(`${path}.state.headingY must be a number`);
+    if ('velocityX' in state && state.velocityX !== undefined && !isNumber(state.velocityX)) errors.push(`${path}.state.velocityX must be a number`);
+    if ('velocityY' in state && state.velocityY !== undefined && !isNumber(state.velocityY)) errors.push(`${path}.state.velocityY must be a number`);
+}
+
+function validatePlayerAction(action: unknown, path: string, errors: string[]): void {
+    if (!isObject(action)) {
+        errors.push(`${path}.action is required`);
+        return;
+    }
+
+    if (!isNumber(action.moveX)) errors.push(`${path}.action.moveX is required`);
+    if (!isNumber(action.moveY)) errors.push(`${path}.action.moveY is required`);
+    if (!isNumber(action.aimX)) errors.push(`${path}.action.aimX is required`);
+    if (!isNumber(action.aimY)) errors.push(`${path}.action.aimY is required`);
+    if (!isNumber(action.fire)) errors.push(`${path}.action.fire is required`);
+}
+
+function validateDecisionReason(reason: unknown, path: string, errors: string[]): void {
+    if (!isObject(reason)) {
+        errors.push(`${path}.reason is required`);
+        return;
+    }
+
+    if (!isString(reason.source)) errors.push(`${path}.reason.source is required`);
+    if (!isString(reason.label)) errors.push(`${path}.reason.label is required`);
+    if (!isObject(reason.evidence)) errors.push(`${path}.reason.evidence is required`);
+}
+
+function validateMeasurements(measurements: unknown, path: string, errors: string[]): void {
+    if (!isObject(measurements)) {
+        errors.push(`${path}.measurements is required`);
+        return;
+    }
+}
+
+function validateTrajectorySteps(raw: { steps: unknown[] }, errors: string[]): void {
+    raw.steps.forEach((step, stepIndex) => {
+        const stepPath = `steps[${stepIndex}]`;
+        if (!isObject(step)) {
+            errors.push(`${stepPath} must be an object`);
+            return;
+        }
+        if (typeof step.step !== 'number') errors.push(`${stepPath}.step is required`);
+        if (!Array.isArray(step.players)) {
+            errors.push(`${stepPath}.players must be an array`);
+            return;
+        }
+        step.players.forEach((player, playerIndex) => {
+            const path = `${stepPath}.players[${playerIndex}]`;
+            if (!isObject(player)) {
+                errors.push(`${path} must be an object`);
+                return;
+            }
+            if (!isString(player.actorId)) errors.push(`${path}.actorId is required`);
+            if (!isString(player.actorTeamId)) errors.push(`${path}.actorTeamId is required`);
+            validatePlayerState(player.state, path, errors);
+            validatePlayerAction(player.action, path, errors);
+            validateDecisionReason(player.reason, path, errors);
+            validateMeasurements(player.measurements, path, errors);
+        });
+    });
+}
+
+export function validateReplayableTrajectory(raw: unknown): string[] {
     if (!isObject(raw)) return ['trajectory must be an object'];
 
     const errors: string[] = [];
-    if (typeof raw.schemaVersion !== 'string' || !raw.schemaVersion) errors.push('schemaVersion is required');
+    if (!isString(raw.schemaVersion)) errors.push('schemaVersion is required');
     if (!isObject(raw.initialState)) errors.push('initialState is required');
     if (!Array.isArray(raw.steps)) {
         errors.push('steps must be an array');
         return errors;
     }
 
-    raw.steps.forEach((step, stepIndex) => {
-        if (!isObject(step)) {
-            errors.push(`steps[${stepIndex}] must be an object`);
-            return;
-        }
-        if (!Array.isArray(step.players)) {
-            errors.push(`steps[${stepIndex}].players must be an array`);
-            return;
-        }
-        step.players.forEach((player, playerIndex) => {
-            const path = `steps[${stepIndex}].players[${playerIndex}]`;
-            if (!isObject(player)) {
-                errors.push(`${path} must be an object`);
-                return;
-            }
-            if (typeof player.actorId !== 'string' || !player.actorId) errors.push(`${path}.actorId is required`);
-            if (!isObject(player.state)) errors.push(`${path}.state is required`);
-            if (!isObject(player.action)) errors.push(`${path}.action is required`);
-        });
-    });
+    validateTrajectorySteps(raw as { steps: unknown[] }, errors);
     return errors;
 }
 
+export function validateTrajectory(raw: unknown): string[] {
+    return validateReplayableTrajectory(raw);
+}
+
 export function loadTrajectoryFromObject(raw: unknown): Trajectory {
-    const errors = validateTrajectory(raw);
+    const errors = validateReplayableTrajectory(raw);
     if (errors.length) throw new Error(`Invalid trajectory: ${errors.join('; ')}`);
     return JSON.parse(JSON.stringify(raw)) as Trajectory;
 }

@@ -11,6 +11,7 @@ import {
     loadTrajectoryFromObject
 } from '../../engine/traces/trajectoryReplay';
 import BattleEnvironmentController from '../../features/BattleEnvironment/controller';
+import { downloadTrajectoryJson, readTrajectoryFile } from '../../features/BattleEnvironment/trajectoryFileIO';
 
 const BOT_IDS = [1, 2, 3, 4];
 
@@ -49,6 +50,8 @@ export function useSimulation() {
     const replayEnvironmentRef = useRef(new BattleEnvironmentController());
     const mountedRef = useRef(true);
     const replayTimerRef = useRef(null);
+    const selectedSpeciesRef = useRef(null);
+    const isBattleRunningRef = useRef(false);
 
     const [loading, setLoading] = useState(true);
     const [species, setSpecies] = useState([]);
@@ -61,6 +64,9 @@ export function useSimulation() {
     const [latestLiveFrame, setLatestLiveFrame] = useState(null);
     const [selectedBotId, setSelectedBotId] = useState(1);
     const [botStats, setBotStats] = useState({});
+    const [isBattleRunning, setIsBattleRunning] = useState(false);
+    const [autoRunBattles, setAutoRunBattles] = useState(false);
+    const [mode, setMode] = useState('live');
 
     const stopReplayPlayback = useCallback(() => {
         if (replayTimerRef.current) {
@@ -79,15 +85,31 @@ export function useSimulation() {
         }
     }, []);
 
+    const enterReplayMode = useCallback((trajectory) => {
+        const loadedTrajectory = loadTrajectoryFromObject(trajectory);
+        stopReplayPlayback();
+        setReplayTrajectory(loadedTrajectory);
+        setReplayStepIndex(0);
+        setReplayError(null);
+        setMode('replay');
+        return loadedTrajectory;
+    }, [stopReplayPlayback]);
+
     const runBattle = useCallback((existingSpecies = null) => {
         if (!mountedRef.current) return;
+        if (isBattleRunningRef.current) return;
 
         const trainer = trainerRef.current;
-        if (existingSpecies) {
-            trainer.loadSpeciesFromJSON(existingSpecies);
+        const speciesToUse = existingSpecies || selectedSpeciesRef.current;
+        if (speciesToUse) {
+            trainer.loadSpeciesFromJSON(speciesToUse);
         } else {
             trainer.createInitialSpecies();
         }
+
+        isBattleRunningRef.current = true;
+        setIsBattleRunning(true);
+        setMode('live');
 
         const bot1 = new Bot(1, 'team-a');
         const bot1Genome = trainer.getTopGenome();
@@ -118,6 +140,8 @@ export function useSimulation() {
             if (!mountedRef.current) return;
 
             setLatestTrajectory(results.trajectory);
+            isBattleRunningRef.current = false;
+            setIsBattleRunning(false);
             const fitness = Trainer.calculateBotFitnessFromResults(results, trainer.totalGenerations);
             bot1.genome.addFitness(fitness);
             bot1.genome.totalRounds++;
@@ -125,16 +149,20 @@ export function useSimulation() {
             if (trainer.getTotalRoundsRemaining() <= 0) {
                 trainer.newGeneration();
             }
-            window.setTimeout(() => runBattle(), 0);
+
+            if (autoRunBattles) {
+                window.setTimeout(() => runBattle(speciesToUse), 0);
+            }
         }, (frame) => {
             if (mountedRef.current) setLatestLiveFrame(frame);
         });
-    }, []);
+    }, [autoRunBattles]);
 
     const selectSpecies = useCallback(async (speciesId) => {
         setLoading(true);
         const response = await fetch(`/species/${speciesId}/latest`);
         const selectedSpecies = await response.json();
+        selectedSpeciesRef.current = selectedSpecies;
         setSpeciesData(selectedSpecies);
         setLoading(false);
         runBattle(selectedSpecies);
@@ -142,17 +170,59 @@ export function useSimulation() {
 
     const loadLatestTrajectoryForReplay = useCallback(() => {
         if (!latestTrajectory) return;
-        stopReplayPlayback();
         try {
-            const trajectory = loadTrajectoryFromObject(latestTrajectory);
-            setReplayTrajectory(trajectory);
-            setReplayStepIndex(0);
-            setReplayError(null);
+            enterReplayMode(latestTrajectory);
         } catch (error) {
+            stopReplayPlayback();
             setReplayTrajectory(null);
+            setReplayStepIndex(0);
+            setMode('live');
             setReplayError(error instanceof Error ? error.message : 'Failed to load trajectory');
         }
-    }, [latestTrajectory, stopReplayPlayback]);
+    }, [enterReplayMode, latestTrajectory]);
+
+    const downloadLatestTrajectory = useCallback(() => {
+        if (!latestTrajectory) return;
+        downloadTrajectoryJson(latestTrajectory);
+    }, [latestTrajectory]);
+
+    const loadTrajectoryFile = useCallback(async (file) => {
+        if (!file) return;
+
+        try {
+            const trajectory = await readTrajectoryFile(file);
+            enterReplayMode(trajectory);
+        } catch (error) {
+            stopReplayPlayback();
+            setReplayTrajectory(null);
+            setReplayStepIndex(0);
+            setMode('live');
+            setReplayError(error instanceof Error ? error.message : 'Failed to load trajectory');
+        }
+    }, [enterReplayMode]);
+
+    const clampReplayStepIndex = useCallback((stepIndex) => {
+        if (!replayTrajectory?.steps.length) return 0;
+        return Math.max(0, Math.min(stepIndex, replayTrajectory.steps.length - 1));
+    }, [replayTrajectory]);
+
+    const setReplayStep = useCallback((stepIndex) => {
+        if (!replayTrajectory?.steps.length) return;
+        stopReplayPlayback();
+        setReplayStepIndex(clampReplayStepIndex(stepIndex));
+    }, [clampReplayStepIndex, replayTrajectory, stopReplayPlayback]);
+
+    const goToPreviousReplayStep = useCallback(() => {
+        setReplayStep(replayStepIndex - 1);
+    }, [replayStepIndex, setReplayStep]);
+
+    const goToNextReplayStep = useCallback(() => {
+        setReplayStep(replayStepIndex + 1);
+    }, [replayStepIndex, setReplayStep]);
+
+    const resetReplay = useCallback(() => {
+        setReplayStep(0);
+    }, [setReplayStep]);
 
     const toggleReplayPlayback = useCallback(() => {
         if (!replayTrajectory?.steps.length) return;
@@ -164,14 +234,10 @@ export function useSimulation() {
         if (replayStepIndex >= replayTrajectory.steps.length - 1) {
             setReplayStepIndex(0);
         }
+        setMode('replay');
         setReplayError(null);
         setReplayAutoPlay(true);
     }, [replayAutoPlay, replayStepIndex, replayTrajectory, stopReplayPlayback]);
-
-    const selectReplayStep = useCallback((stepIndex) => {
-        stopReplayPlayback();
-        setReplayStepIndex(stepIndex);
-    }, [stopReplayPlayback]);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -238,24 +304,34 @@ export function useSimulation() {
     return {
         botIds: BOT_IDS,
         botStats,
+        autoRunBattles,
+        downloadLatestTrajectory,
+        isBattleRunning,
         generation: speciesData?.totalGenerations,
         latestTrajectory,
         loading,
+        loadTrajectoryFile,
         loadLatestTrajectoryForReplay,
         maxFitness: speciesData?.maxFitness,
+        mode,
         replayAutoPlay,
         replayError,
         replayMaxStep: replayTrajectory ? Math.max(replayTrajectory.steps.length - 1, 0) : 0,
         replayStepIndex,
         replayTrajectory,
+        resetReplay,
+        goToNextReplayStep,
+        goToPreviousReplayStep,
         selectSpecies,
         selectedBotId,
         selectedReplayPlayer,
         selectedStats,
-        setReplayStepIndex: selectReplayStep,
+        setReplayStepIndex: setReplayStep,
         setSelectedBotId,
+        setAutoRunBattles,
         species,
         speciesData,
+        runBattleOnce: runBattle,
         toggleReplayPlayback
     };
 }
