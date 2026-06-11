@@ -17,8 +17,61 @@ h1 {
 }
 
 #battle {
-  width: 1000px;
+  width: min-content;
   margin: 0 auto;
+}
+
+.battle-layout {
+  display: grid;
+  grid-template-columns: 1000px 280px;
+  align-items: start;
+  gap: 16px;
+}
+
+.battle-environment {
+  display: grid;
+  gap: 16px;
+}
+
+.battleground-canvas {
+  display: block;
+  border: 1px solid #333;
+  background: #ddffdd;
+}
+
+.replay-section {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 3px solid #333;
+}
+
+.species-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.replay-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.replay-controls button {
+  margin-right: 8px;
+}
+
+.replay-slider {
+  display: inline-block;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.replay-slider input {
+  width: 360px;
+  vertical-align: middle;
 }
 
 .species-card {
@@ -41,27 +94,54 @@ h1 {
 }
 
 .species-card .container {
+  display: grid;
+  gap: 12px;
   padding: 2px 16px;
 } 
 
-#bot1brain {
-  float: left
+.brain-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 400px);
+  gap: 16px;
 }
 
-#bot2brain {
-  float: left
+.brain-board h4 {
+  margin: 0 0 6px;
 }
 
-#species-stats {
-  float: left;
-  width: 180px;
-  height: 400px;
-  padding-left: 10px;
-  padding-right: 10px;
+.brain-board canvas {
+  display: block;
+  border: 2px solid #333;
+}
+
+.species-stats {
+  width: 100%;
+  padding: 12px;
+  box-sizing: border-box;
   font-size: 1em;
+  border: 1px solid #ccc;
 }
 
-#species-stats p {
+.bot-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.bot-button-row button.active {
+  font-weight: bold;
+  background: #d9edf7;
+}
+
+.selected-bot-panel {
+  border: 1px solid #ccc;
+  padding: 8px;
+  margin-bottom: 12px;
+  background: #f9f9f9;
+}
+
+.species-stats p {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
 }

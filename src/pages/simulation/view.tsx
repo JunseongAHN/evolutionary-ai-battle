@@ -52,12 +52,13 @@ function BotDetails({ simulation, replay = false }) {
                     <>
                         <p>Replay Step: {simulation.replayStepIndex}</p>
                         <p>
-                            Action: dx={replayPlayer.action.dx}, dy={replayPlayer.action.dy},
-                            dh={replayPlayer.action.dh}, shoot={String(replayPlayer.action.ds)}
+                            Action: moveX={replayPlayer.action.moveX}, moveY={replayPlayer.action.moveY},
+                            aimX={replayPlayer.action.aimX}, aimY={replayPlayer.action.aimY},
+                            fire={replayPlayer.action.fire}
                         </p>
                         <p>Reason: {replayPlayer.reason.label}</p>
-                        <p>HP: {replayPlayer.measurements.hp}</p>
-                        <p>Position: {replayPlayer.measurements.positionX}, {replayPlayer.measurements.positionY}</p>
+                        <p>HP: {replayPlayer.state.hp}</p>
+                        <p>Position: {replayPlayer.state.positionX}, {replayPlayer.state.positionY}</p>
                         <p>Nearest Ally: {replayPlayer.measurements.nearestAllyDistance}</p>
                         <p>Nearest Enemy: {replayPlayer.measurements.nearestEnemyDistance}</p>
                     </>
@@ -102,6 +103,7 @@ export function SimulationPage() {
                         <BotDetails simulation={simulation} replay />
                     </div>
                     <section className="replay-controls">
+                        {simulation.replayError && <p className="replay-error">{simulation.replayError}</p>}
                         <button onClick={simulation.loadLatestTrajectoryForReplay} disabled={!simulation.latestTrajectory}>
                             Load Last Trajectory
                         </button>

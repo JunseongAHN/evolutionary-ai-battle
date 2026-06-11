@@ -57,6 +57,7 @@ export function useSimulation() {
     const [replayTrajectory, setReplayTrajectory] = useState(null);
     const [replayStepIndex, setReplayStepIndex] = useState(0);
     const [replayAutoPlay, setReplayAutoPlay] = useState(false);
+    const [replayError, setReplayError] = useState(null);
     const [latestLiveFrame, setLatestLiveFrame] = useState(null);
     const [selectedBotId, setSelectedBotId] = useState(1);
     const [botStats, setBotStats] = useState({});
@@ -142,8 +143,15 @@ export function useSimulation() {
     const loadLatestTrajectoryForReplay = useCallback(() => {
         if (!latestTrajectory) return;
         stopReplayPlayback();
-        setReplayTrajectory(loadTrajectoryFromObject(latestTrajectory));
-        setReplayStepIndex(0);
+        try {
+            const trajectory = loadTrajectoryFromObject(latestTrajectory);
+            setReplayTrajectory(trajectory);
+            setReplayStepIndex(0);
+            setReplayError(null);
+        } catch (error) {
+            setReplayTrajectory(null);
+            setReplayError(error instanceof Error ? error.message : 'Failed to load trajectory');
+        }
     }, [latestTrajectory, stopReplayPlayback]);
 
     const toggleReplayPlayback = useCallback(() => {
@@ -152,8 +160,18 @@ export function useSimulation() {
             stopReplayPlayback();
             return;
         }
+
+        if (replayStepIndex >= replayTrajectory.steps.length - 1) {
+            setReplayStepIndex(0);
+        }
+        setReplayError(null);
         setReplayAutoPlay(true);
-    }, [replayAutoPlay, replayTrajectory, stopReplayPlayback]);
+    }, [replayAutoPlay, replayStepIndex, replayTrajectory, stopReplayPlayback]);
+
+    const selectReplayStep = useCallback((stepIndex) => {
+        stopReplayPlayback();
+        setReplayStepIndex(stepIndex);
+    }, [stopReplayPlayback]);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -191,20 +209,26 @@ export function useSimulation() {
     useEffect(() => {
         if (!replayAutoPlay || !replayTrajectory?.steps.length) return;
 
-        replayTimerRef.current = window.setInterval(() => {
+        const timer = window.setInterval(() => {
             setReplayStepIndex((stepIndex) => {
                 if (stepIndex + 1 >= replayTrajectory.steps.length) {
-                    stopReplayPlayback();
+                    window.clearInterval(timer);
+                    replayTimerRef.current = null;
+                    setReplayAutoPlay(false);
                     return stepIndex;
                 }
                 return stepIndex + 1;
             });
         }, 120);
+        replayTimerRef.current = timer;
+
         return () => {
-            if (replayTimerRef.current) window.clearInterval(replayTimerRef.current);
-            replayTimerRef.current = null;
+            window.clearInterval(timer);
+            if (replayTimerRef.current === timer) {
+                replayTimerRef.current = null;
+            }
         };
-    }, [replayAutoPlay, replayTrajectory, stopReplayPlayback]);
+    }, [replayAutoPlay, replayTrajectory]);
 
     const selectedStats = botStats[selectedBotId] || {};
     const selectedReplayPlayer = replayStepFrame
@@ -220,6 +244,7 @@ export function useSimulation() {
         loadLatestTrajectoryForReplay,
         maxFitness: speciesData?.maxFitness,
         replayAutoPlay,
+        replayError,
         replayMaxStep: replayTrajectory ? Math.max(replayTrajectory.steps.length - 1, 0) : 0,
         replayStepIndex,
         replayTrajectory,
@@ -227,7 +252,7 @@ export function useSimulation() {
         selectedBotId,
         selectedReplayPlayer,
         selectedStats,
-        setReplayStepIndex,
+        setReplayStepIndex: selectReplayStep,
         setSelectedBotId,
         species,
         speciesData,

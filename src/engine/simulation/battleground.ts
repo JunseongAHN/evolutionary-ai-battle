@@ -34,6 +34,7 @@ class Battleground {
         this.bullets = [];
         this.traceRecorder = new TraceRecorder();
         this.trajectoryStep = 0;
+        this.projectileSequence = 0;
         this.onEnd = null;
         this.onFrame = null;
         this.winner = null;
@@ -67,9 +68,11 @@ class Battleground {
         this.lastActionTime = Date.now();
         this.lastBotMoveTime = Date.now();
         this.trajectoryStep = 0;
+        this.projectileSequence = 0;
         this.endReason = 'battle_timeout';
         this.traceRecorder.reset();
         this.traceRecorder.startTrajectory(this.createTrajectoryMetadata());
+        this.traceRecorder.recordInitialState(this.createInitialState());
         this.emitFrame();
         this.updateBots();
         this.updateBotsInterval = setInterval(this.updateBots.bind(this), TICK_TIME);
@@ -201,6 +204,8 @@ class Battleground {
         const moveSpeedMultiplier = 1000 / TICK_TIME; // Bots actually move at maxSpeed every 75ms not every 1000ms.
 
         this.lastUpdate = Date.now();
+        this.stepDamage = {};
+        this.stepActions = this.botActions.map((action) => action ? { ...action } : null);
 
         for (var i = 0; i < this.bots.length; i++) {
             const bot = this.bots[i];
@@ -249,6 +254,24 @@ class Battleground {
                 if (!hitEnemy) return;
 
                 hitEnemy.lives -= 1;
+                const actorId = this.getActorId(bot);
+                const targetId = this.getActorId(hitEnemy);
+                this.stepDamage[actorId] = {
+                    ...(this.stepDamage[actorId] || {}),
+                    dealt: (this.stepDamage[actorId]?.dealt || 0) + 1
+                };
+                this.stepDamage[targetId] = {
+                    ...(this.stepDamage[targetId] || {}),
+                    taken: (this.stepDamage[targetId]?.taken || 0) + 1
+                };
+                this.traceRecorder.recordEvent(this.trajectoryStep, {
+                    type: hitEnemy.lives <= 0 ? 'elimination' : 'damage',
+                    actorId,
+                    actorTeamId: bot.teamId,
+                    targetId,
+                    targetTeamId: hitEnemy.teamId,
+                    damage: 1
+                });
                 log.debug('Bot ' + hitEnemy.id + ' hit! Now has ' + hitEnemy.lives + ' lives left.');
                 bullet.dead = true;
             });
@@ -258,7 +281,7 @@ class Battleground {
 
             if (botActions.ds && bot.bullets.length < 5 && (Date.now() - this.lastShootTime[i]) >= TICK_TIME) {
                 this.lastShootTime[i] = Date.now();
-                let bullet = this.spawnBullet(bot.xPos, bot.yPos, bot.rotation);
+                let bullet = this.spawnBullet(bot);
                 log.debug('Spawning bullet: ', bullet);
                 botActions.ds = false;
                 bot.bullets.push(bullet);
@@ -296,18 +319,16 @@ class Battleground {
             teamId,
             playerIds: this.bots
                 .filter((bot) => bot.teamId === teamId)
-                .map((_, index) => `${teamId}-${index}`)
+                .map((bot) => this.getActorId(bot))
         }));
 
-        const teamCounters = {};
         const players = this.bots.map((bot) => {
-            const teamIndex = teamCounters[bot.teamId] || 0;
-            teamCounters[bot.teamId] = teamIndex + 1;
             return {
-                id: `${bot.teamId}-${teamIndex}`,
+                id: this.getActorId(bot),
                 teamId: bot.teamId,
                 tacticId: null,
-                policyId: null
+                policyId: bot.aiMethod ? 'heuristic' : 'neural_network',
+                genomeId: null
             };
         });
 
@@ -322,10 +343,96 @@ class Battleground {
         };
     }
 
+    getActorId(bot) {
+        const teamIndex = this.bots.filter((candidate) => candidate.teamId === bot.teamId).indexOf(bot);
+        return `${bot.teamId}-${teamIndex}`;
+    }
+
+    getHeading(bot) {
+        const rotationRadians = bot.rotation * Math.PI / 180;
+        return {
+            headingX: Math.cos(rotationRadians),
+            headingY: Math.sin(rotationRadians)
+        };
+    }
+
+    getEnvironmentState(includeBounds = false) {
+        const projectiles = this.bots.flatMap((bot) => bot.bullets.map((bullet) => {
+            const rotationRadians = bullet.rotation * Math.PI / 180;
+            return {
+                id: bullet.id,
+                shooterId: bullet.shooterId,
+                shooterTeamId: bullet.shooterTeamId,
+                positionX: bullet.xPos,
+                positionY: bullet.yPos,
+                headingX: Math.cos(rotationRadians),
+                headingY: Math.sin(rotationRadians)
+            };
+        }));
+
+        return {
+            width: config.mapWidth,
+            height: config.mapHeight,
+            ...(includeBounds ? {
+                bounds: {
+                    minX: 0,
+                    minY: 0,
+                    maxX: config.mapWidth,
+                    maxY: config.mapHeight
+                }
+            } : {}),
+            activeProjectileCount: projectiles.length,
+            projectiles,
+            remainingTeams: getAliveTeamIds(this.bots)
+        };
+    }
+
+    createInitialState() {
+        return {
+            environment: this.getEnvironmentState(true),
+            players: this.bots.map((bot) => ({
+                id: this.getActorId(bot),
+                teamId: bot.teamId,
+                positionX: bot.xPos,
+                positionY: bot.yPos,
+                ...this.getHeading(bot),
+                hp: bot.lives,
+                alive: bot.lives > 0
+            }))
+        };
+    }
+
+    getPlayerState(bot, action) {
+        return {
+            positionX: bot.xPos,
+            positionY: bot.yPos,
+            ...this.getHeading(bot),
+            velocityX: action?.dx || 0,
+            velocityY: action?.dy || 0,
+            hp: bot.lives,
+            alive: bot.lives > 0,
+            // TODO: expose exact remaining cooldown from the simulation.
+            cooldown: 0
+        };
+    }
+
+    getPlayerAction(bot, action) {
+        const heading = this.getHeading(bot);
+        return {
+            moveX: action?.dx || 0,
+            moveY: action?.dy || 0,
+            aimX: heading.headingX,
+            aimY: heading.headingY,
+            fire: action?.ds ? 1 : 0
+        };
+    }
+
     getPlayerMeasurements(bot) {
         const aliveBots = getAliveBots(this.bots);
         const sameTeamBots = aliveBots.filter((otherBot) => otherBot !== bot && !isEnemy(bot, otherBot));
         const enemyBots = aliveBots.filter((otherBot) => isEnemy(bot, otherBot));
+        const nearestEnemy = this.getNearestEnemy(bot);
+        const actorId = this.getActorId(bot);
         const nearestDistance = (candidates) => {
             if (!candidates.length) return 0;
             return candidates.reduce((nearest, candidate) => {
@@ -336,13 +443,16 @@ class Battleground {
         };
 
         return {
-            positionX: bot.xPos,
-            positionY: bot.yPos,
-            hp: bot.lives,
             nearestAllyDistance: nearestDistance(sameTeamBots),
             nearestEnemyDistance: nearestDistance(enemyBots),
-            damageDealt: 0,
-            damageTaken: 0
+            targetId: nearestEnemy ? this.getActorId(nearestEnemy) : null,
+            targetDistance: nearestEnemy
+                ? distanceBetweenPoints(bot.xPos, bot.yPos, nearestEnemy.xPos, nearestEnemy.yPos)
+                : null,
+            // TODO: expose the policy's selected target to calculate aim alignment.
+            aimTargetAlignment: null,
+            damageDealt: this.stepDamage?.[actorId]?.dealt || 0,
+            damageTaken: this.stepDamage?.[actorId]?.taken || 0
         };
     }
 
@@ -353,20 +463,25 @@ class Battleground {
                     return null;
                 }
 
-                const teamIndex = this.bots.filter((candidate) => candidate.teamId === bot.teamId).indexOf(bot);
-                const actorId = `${bot.teamId}-${teamIndex}`;
+                const action = this.stepActions?.[index] || { dx: 0, dy: 0, dh: 0, ds: false };
                 return {
-                    step: this.trajectoryStep,
-                    actorId,
+                    actorId: this.getActorId(bot),
                     actorTeamId: bot.teamId,
-                    action: this.botActions[index] || { dx: 0, dy: 0, dh: 0, ds: false },
+                    state: this.getPlayerState(bot, action),
+                    action: this.getPlayerAction(bot, action),
                     reason: createDefaultDecisionReason(),
                     measurements: this.getPlayerMeasurements(bot)
                 };
             })
             .filter(Boolean);
 
-        this.traceRecorder.recordStep(this.trajectoryStep, Date.now() - this.startTime, playerRecords);
+        this.traceRecorder.recordStep({
+            step: this.trajectoryStep,
+            timeMs: Date.now() - this.startTime,
+            environment: this.getEnvironmentState(),
+            players: playerRecords,
+            events: []
+        });
         this.trajectoryStep += 1;
     }
 
@@ -381,6 +496,9 @@ class Battleground {
                     rotation: bot.rotation,
                     lives: bot.lives,
                     bullets: bot.bullets.map((bullet) => ({
+                        id: bullet.id,
+                        shooterId: bullet.shooterId,
+                        shooterTeamId: bullet.shooterTeamId,
                         xPos: bullet.xPos,
                         yPos: bullet.yPos,
                         rotation: bullet.rotation
@@ -393,11 +511,17 @@ class Battleground {
     /**
      * Returns a bullet object given a position and rotation
      */
-    spawnBullet(xPos, yPos, rotation) {
+    spawnBullet(bot) {
+        const projectileId = `projectile-${this.projectileSequence}`;
+        this.projectileSequence += 1;
+
         return {
-            xPos,
-            yPos,
-            rotation
+            id: projectileId,
+            shooterId: this.getActorId(bot),
+            shooterTeamId: bot.teamId,
+            xPos: bot.xPos,
+            yPos: bot.yPos,
+            rotation: bot.rotation
         };
     }
 }
