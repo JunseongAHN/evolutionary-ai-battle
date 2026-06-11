@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * This class controls the bots actions. It takes in the world state from the battleground each tick, 
  * and responds with the actions the bot is going to take in that tick. 
@@ -10,16 +11,15 @@
  *  - Take the output layer of the neural network and make decisions based on that
  */
 
-import { translateMatrix, rotateAroundPoint, degreesToRadians, sigmoid } from './math';
-import Genome from './genome';
-import config from '../config/default.json';
+import { translateMatrix, rotateAroundPoint, degreesToRadians } from '../../shared/math';
+import Genome from '../evolution/genome';
+import config from '../../../config/default.json';
 const debug = require("debug")("eai:bot");
 
 import {
-    BRAIN_CANVAS_SCALE,
     INPUT_WIDTH,
     INPUT_NEURONS,
-} from './constants'
+} from '../../shared/constants'
 
 const MAP_WIDTH = config.mapWidth;
 const MAP_HEIGHT = config.mapHeight;
@@ -28,8 +28,9 @@ const MAX_SPEED = config.maxSpeed;
 const STARTING_LIVES = config.startingLives;
 
 class Bot {
-    constructor(id) {
+    constructor(id, view = null) {
         this.id = id;
+        this.view = view;
         const poseNum = this.id - 1;
         this.xPos = Math.floor(Math.random() * config.botStartPoses[poseNum].xPos.max + config.botStartPoses[poseNum].xPos.min);
         this.yPos = Math.floor(Math.random() * config.botStartPoses[poseNum].yPos.max + config.botStartPoses[poseNum].yPos.min);
@@ -321,59 +322,11 @@ class Bot {
      * so that it is relative to the bots position and orientation.
      **/
     drawBrainView(translatedPositions) {
-        if (typeof document === "undefined") return;
-
-        var canvas = document.getElementById('bot' + this.id + 'brain');
-        if (canvas.getContext) {
-            var ctx = canvas.getContext('2d');
-            const playerBGColor = this.id == 1 ? "#ffdddd" : "#ddddff";
-            const playerColor = this.id == 1 ? "#ff0000" : "#0000ff";
-            const enemyColor = this.id == 1 ? "#0000ff" : "#ff0000";
-            ctx.fillStyle = playerBGColor;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Draw player, always in center. 
-            ctx.fillStyle = playerColor;
-            const scaledXPos = this.scaleForBrainView(MAP_WIDTH);
-            const scaledYPos = this.scaleForBrainView(MAP_HEIGHT + this.getVerticalOffset());
-            ctx.fillRect(scaledXPos, scaledYPos, BRAIN_CANVAS_SCALE, BRAIN_CANVAS_SCALE);
-
-            //Draw other player and objects, translated to how this brain sees them. 
-            ctx.fillStyle = enemyColor;
-            const opponentXPos = this.scaleForBrainView(translatedPositions.xPos);
-            const opponentYPos = this.scaleForBrainView(translatedPositions.yPos);
-            ctx.fillRect(opponentXPos, opponentYPos, BRAIN_CANVAS_SCALE, BRAIN_CANVAS_SCALE);
-
-            ctx.fillStyle = "#000000";
-            translatedPositions.bullets.forEach((bullet) => {
-                const bulletXPos = this.scaleForBrainView(bullet.xPos);
-                const bulletYPos = this.scaleForBrainView(bullet.yPos);
-                ctx.fillRect(bulletXPos, bulletYPos, BRAIN_CANVAS_SCALE, BRAIN_CANVAS_SCALE);
-            });
-
-            translatedPositions.walls.forEach((wall) => {
-                const wallXPos = this.scaleForBrainView(wall.xPos);
-                const wallYPos = this.scaleForBrainView(wall.yPos);
-                ctx.fillRect(wallXPos, wallYPos, BRAIN_CANVAS_SCALE, BRAIN_CANVAS_SCALE);
-            });
-
-
+        if (this.view) {
+            this.view.drawBrain(this, translatedPositions);
         }
     }
 
-    /**
-     * Scales position values to fit the world onto the small brain view graph. 
-     * 
-     * @param {int} value 
-     */
-    scaleForBrainView(value) {
-        /**
-         * Find the square of the neural network (each are NN_SQUARE_SIZE in width and height) that 
-         * the value is inside, and then scale based on the size of this brain canvas. 
-         */
-        return Math.floor(value / NN_SQUARE_SIZE) * BRAIN_CANVAS_SCALE;
-    }
- 
     /**
      * This is called by the BattleGround each tick. Takes the current world information 
      * and returns the bots action for this tick. 

@@ -1,6 +1,6 @@
-# Evolutionary AI Battle
+# Co-Player Evaluation Harness
 
-A 2D battleground simulation where AI's fight each other and evolve over time. 
+A co-player behavior evaluation harness built on a 2D battleground simulation where AI agents fight and evolve over time.
 
 ![Example of AI evolving over generations](example.gif)
 
@@ -22,8 +22,17 @@ genes plus get some random mutations of their own. The remaining parents and all
 npm install
 ```
 
-The code is written using ES6 functionality and is compiled for the browser using Webpack and compiled
-for NodeJS using Babel. The browser entrypoint is `src/index.js` and the NodeJS entrypoint is `src/coordinator.js`.
+The code is written in TypeScript and is compiled for the browser using Webpack and for NodeJS using
+the TypeScript compiler. The browser entrypoint is `src/app/index.ts` and the NodeJS entrypoint is
+`src/engine/evolution/coordinator.ts`.
+
+## Architecture
+
+- `src/engine`: UI-independent simulation, agents, evolution, training, and trace generation
+- `src/evaluation`: co-player behavior scenarios, metrics, evaluation runner, and reporting
+- `src/features`: browser-facing views and thin UI-controller glue
+- `src/shared`: common utilities, constants, and logging
+- `src/app`: application entrypoint and wiring
 
 ## Usage
 
@@ -50,9 +59,10 @@ This will run all battles for each generation in parallel in headless mode. This
 npm run train
 ```
 
-This will compile all the src files into `dist/nodejs/` then run `node dist/nodejs/coordinator.js` to start the training.
+This will compile all source files into `dist/` then run `node dist/engine/evolution/coordinator.js` to start training.
 
-If training gets interrupted and you wish to start it from where it left off, there is a line at the top of src/coordinator.js which you can uncomment
+If training gets interrupted and you wish to start it from where it left off, there is a line at the top of
+`src/engine/evolution/coordinator.ts` which you can uncomment
 to resume training from that point.
 
 If you want to see debug logs while training run training with the environment variable DEBUG set to true.

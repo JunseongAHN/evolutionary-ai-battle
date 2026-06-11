@@ -1,18 +1,20 @@
 {
   "name": "evolutionary-ai-battle",
   "version": "1.0.0",
-  "description": "A 2D battleground simulation where AI's fight each other and evolve over time.",
+  "description": "A co-player behavior evaluation harness built on an evolutionary battle simulation.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/timjrobinson/evolutionary-ai-battle.git"
   },
-  "main": "src/index.js",
+  "main": "dist/app/index.js",
   "scripts": {
     "start": "npm run compile-browser && node server.js",
+    "build": "npm run compile-browser && npm run compile-node",
     "test": "echo \"Error: no test specified\" && exit 1",
+    "typecheck": "tsc --noEmit",
     "compile-browser": "npx webpack --mode production",
-    "compile-node": "npx babel -d dist/ src",
-    "train": "npm run compile-node && node dist/coordinator.js"
+    "compile-node": "tsc",
+    "train": "npm run compile-node && node dist/engine/evolution/coordinator.js"
   },
   "author": "Tim Robinson <tim@timjrobinson.com>",
   "license": "MIT",
@@ -26,6 +28,9 @@
     "@babel/cli": "^7.8.4",
     "@babel/core": "^7.9.0",
     "@babel/preset-env": "^7.9.0",
+    "@types/node": "^25.9.2",
+    "ts-loader": "^9.6.0",
+    "typescript": "^6.0.3",
     "webpack": "^5.76.0",
     "webpack-cli": "^5.0.1"
   },

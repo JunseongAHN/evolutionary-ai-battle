@@ -1,12 +1,13 @@
+// @ts-nocheck
 /**
  * The battleground class controls the updating and drawing of an invidual battle between bots. 
  * 
  * It runs an update loop that ticks every config.tickTime milliseconds, and runs a draw loop that runs
  * as fast as your computer can handle. 
  */
-import { distanceBetweenPoints } from './math';
-import config from '../config/default.json'
-import log from './logger'
+import { distanceBetweenPoints } from '../../shared/math';
+import config from '../../../config/default.json'
+import log from '../../shared/logger'
 
 const TICK_TIME = config.tickTime;
 const BOT_RADIUS = config.botSize / 2;
@@ -24,7 +25,8 @@ const NO_MOVE_TIMEOUT = config.noMoveTimeout;
 const BATTLE_TIMEOUT = config.maxRoundTime;
 
 class Battleground {
-    constructor() {
+    constructor(view = null) {
+        this.view = view;
         this.bots = [];
         this.botActions = [];
         this.bullets = [];
@@ -234,45 +236,8 @@ class Battleground {
      * Draws the main battlefield to the screen. Does not run in NodeJS training mode
      */
     draw() {
-        if (typeof document === "undefined") return;
-
-        var canvas = document.getElementById('battleground');
-        if (canvas.getContext) {
-            var ctx = canvas.getContext('2d');
-            let fillStyle = "#ddffdd";
-            ctx.fillStyle = fillStyle;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            this.bots.forEach(function (bot) {
-                const botColor = bot.id == 1 ? "#ffdddd" : "#ddddff";
-                ctx.fillStyle = botColor;
-                ctx.beginPath();
-                ctx.arc(bot.xPos, bot.yPos, BOT_RADIUS, 0, 2 * Math.PI, false);
-                ctx.fill();
-
-                ctx.strokeStyle = "#000000";
-                ctx.lineWidth = 1;
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.lineWidth = 3;
-                ctx.moveTo(bot.xPos, bot.yPos);
-                ctx.lineTo(
-                    bot.xPos + (BOT_RADIUS * Math.cos(bot.rotation * Math.PI / 180)),
-                    bot.yPos + (BOT_RADIUS * Math.sin(bot.rotation * Math.PI / 180)),
-                )
-                ctx.stroke();
-                ctx.resetTransform();
-
-                ctx.fillStyle = "#000000";
-                if (bot.bullets.length) {
-                    bot.bullets.forEach(function (bullet) {
-                        ctx.beginPath();
-                        ctx.arc(bullet.xPos, bullet.yPos, BULLET_RADIUS, 0, 2 * Math.PI, false);
-                        ctx.fill();
-                    })
-                }
-            });
+        if (this.view) {
+            this.view.drawBattleground(this.bots);
         }
     }
 

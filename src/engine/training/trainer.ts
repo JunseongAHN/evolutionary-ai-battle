@@ -1,12 +1,13 @@
+// @ts-nocheck
 /**
  * The trainer holds all the species and genomes inside those species. 
  * It handles keeping track of the fitnesses of each genome, eliminating those that 
  * are unfit, saving and loading genomes to disk etc. 
  */
-import Species from './species'
-import Genome from './genome';
-import config from '../config/default.json';
-import log from './logger'
+import Species from '../evolution/species'
+import Genome from '../evolution/genome';
+import config from '../../../config/default.json';
+import log from '../../shared/logger'
 import Debug from 'debug';
 const debug = Debug("eai:trainer");
 
