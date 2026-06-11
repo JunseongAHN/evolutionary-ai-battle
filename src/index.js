@@ -33,6 +33,15 @@ var app = new Vue({
                 battle.call(this, speciesData);
             });
         },
+        async refreshSpecies() {
+            try {
+                const response = await fetch('/species');
+                const species = await response.json();
+                this.species = formatSpecies(sortSpecies(species));
+            } catch (err) {
+                console.error('Failed to refresh species list', err);
+            }
+        },
     },
     computed: {
         generation() {
@@ -55,10 +64,16 @@ var app = new Vue({
         }
     },
     async mounted() {
-        const response = await fetch('/species');
-        const species = await response.json();
-        this.species = formatSpecies(sortSpecies(species));
+        await this.refreshSpecies();
         this.loading = false;
+        this.refreshTimer = window.setInterval(() => {
+            this.refreshSpecies();
+        }, 5000);
+    },
+    beforeDestroy() {
+        if (this.refreshTimer) {
+            window.clearInterval(this.refreshTimer);
+        }
     }
 });
 
@@ -66,7 +81,7 @@ function sortSpecies(speciesData) {
     return speciesData.sort((a, b) => {
         const aLastUpdate = new Date(a.lastUpdate);
         const bLastUpdate = new Date(b.lastUpdate);
-        return aLastUpdate.getTime() < bLastUpdate.getTime();
+        return aLastUpdate.getTime() - bLastUpdate.getTime();
     });
 }
 

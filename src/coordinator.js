@@ -16,6 +16,8 @@ const cluster = require('cluster');
 const async = require("async");
 const fs = require("fs");
 
+const isPrimaryProcess = cluster.isPrimary || cluster.isMaster;
+
 import Bot from './bot'
 import Battleground from './battleground'
 import Trainer from './trainer'
@@ -31,7 +33,7 @@ import log from './logger'
  * On first run of this file cluster.isMaster is true. There is only one master process. 
  * When a worker calls fork inside that fork cluster.isMaster will be false so the battle process begins
  */
-if (cluster.isMaster) {
+if (isPrimaryProcess) {
     trainerProcess();
 } else {
     battleProcess();
@@ -90,12 +92,46 @@ function startGenerationBattles(runId, trainer) {
 }
 
 function startRound(totalGenerations, genome1, genome2, callback) {
-    const worker = cluster.fork();
+    let settled = false;
+
+    const finalize = (results) => {
+        if (settled) {
+            return;
+        }
+        settled = true;
+        return callback(results);
+    };
+
+    let worker;
+
+    try {
+        worker = cluster.fork();
+    } catch (err) {
+        log.info(`Unable to start training worker: ${err.message}`);
+        return finalize(null);
+    }
+
     worker.on('message', (msg) => {
-        if (msg.type == 'results') {
+        if (msg.type === 'results') {
             handleResults(msg.data);
+        } else if (msg.type === 'error') {
+            log.info(`Worker reported an error: ${msg.data.message}`);
+            finalize(null);
         }
     });
+
+    worker.on('error', (err) => {
+        log.info(`Training worker failed: ${err.message}`);
+        finalize(null);
+    });
+
+    worker.on('exit', (code, signal) => {
+        if (!settled) {
+            log.debug(`Worker exited before returning results (code=${code}, signal=${signal})`);
+            finalize(null);
+        }
+    });
+
     worker.send({
         totalGenerations,
         genomes: [
@@ -105,33 +141,57 @@ function startRound(totalGenerations, genome1, genome2, callback) {
     });
 
     function handleResults(results) {
+        if (!results) {
+            genome1.addFitness(0);
+            return finalize(null);
+        }
+
         let botFitness = Trainer.calculateBotFitnessFromResults(results, totalGenerations);
         genome1.addFitness(botFitness);
-        worker.kill();
-        return callback(results);
+        return finalize(results);
     }
 }
 
 function battleProcess() {
-    process.on('message', (msg) => {
-        const bot1 = new Bot(1);
-        const genome1 = Genome.loadFromJSON(msg.genomes[0]);
-        bot1.loadGenome(genome1);
-
-        // Bot 2 just does random stuff
-        const bot2 = new Bot(2);
-        const genome2 = Genome.loadFromJSON(msg.genomes[1]);
-        bot2.loadGenome(genome2);
-        bot2.selectAIMethod(msg.totalGenerations);
-
-        const battleground = new Battleground()
-        battleground.addBots(bot1, bot2);
-        battleground.start((results) => {
-            process.send({
-                type: 'results',
-                data: results
-            });
+    process.on('uncaughtException', (err) => {
+        process.send({
+            type: 'error',
+            data: {
+                message: err.message,
+                stack: err.stack
+            }
         });
+    });
+
+    process.on('message', (msg) => {
+        try {
+            const bot1 = new Bot(1);
+            const genome1 = Genome.loadFromJSON(msg.genomes[0]);
+            bot1.loadGenome(genome1);
+
+            // Bot 2 just does random stuff
+            const bot2 = new Bot(2);
+            const genome2 = Genome.loadFromJSON(msg.genomes[1]);
+            bot2.loadGenome(genome2);
+            bot2.selectAIMethod(msg.totalGenerations);
+
+            const battleground = new Battleground()
+            battleground.addBots(bot1, bot2);
+            battleground.start((results) => {
+                process.send({
+                    type: 'results',
+                    data: results
+                });
+            });
+        } catch (err) {
+            process.send({
+                type: 'error',
+                data: {
+                    message: err.message,
+                    stack: err.stack
+                }
+            });
+        }
     });
 }
 
