@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useRef } from 'react';
+import ScoreBoard from '../../features/BattleEnvironment/components/ScoreBoard';
 import { useSimulation } from './useSimulation';
 
 function botLabel(botId) {
@@ -163,6 +164,11 @@ export function SimulationPage() {
                         </label>
                     </section>
                 </section>
+                <ScoreBoard
+                    accumulatedEvaluation={simulation.accumulatedEvaluation}
+                    currentEvaluation={simulation.currentEvaluation}
+                    onResetScores={simulation.resetScores}
+                />
             </main>
         </>
     );
