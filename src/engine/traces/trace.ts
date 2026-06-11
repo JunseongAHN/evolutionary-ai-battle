@@ -56,6 +56,7 @@ export interface PlayerInitialState {
     headingY: number;
     hp: number;
     alive: boolean;
+    weaponCooldownSteps: number;
 }
 
 export interface InitialState {
@@ -72,7 +73,7 @@ export interface PlayerStateSnapshot {
     velocityY: number;
     hp: number;
     alive: boolean;
-    cooldown: number;
+    weaponCooldownSteps: number;
 }
 
 export interface PlayerAction {
@@ -97,6 +98,8 @@ export interface DecisionReason {
 export interface PlayerMeasurements {
     nearestAllyDistance: number;
     nearestEnemyDistance: number;
+    canFire: boolean;
+    didFire: boolean;
     targetId?: string | null;
     targetDistance?: number | null;
     aimTargetAlignment?: number | null;
@@ -165,6 +168,7 @@ export interface ReplayPlayerState {
     headingY: number;
     hp: number;
     alive: boolean;
+    weaponCooldownSteps: number;
     lastAction: PlayerAction;
     reason: DecisionReason;
     measurements?: PlayerMeasurements;

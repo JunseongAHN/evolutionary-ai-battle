@@ -42,6 +42,7 @@ test('createReplayStateFromStep creates drawable replay state', () => {
     assert.equal(firstPlayer.positionY, 2);
     assert.equal(firstPlayer.hp, 100);
     assert.equal(firstPlayer.alive, true);
+    assert.equal(firstPlayer.weaponCooldownSteps, 0);
     assert.deepEqual(firstPlayer.lastAction, synthetic2v2Trajectory.steps[1].players[0].action);
     assert.deepEqual(firstPlayer.reason, synthetic2v2Trajectory.steps[1].players[0].reason);
     assert.deepEqual(firstPlayer.measurements, synthetic2v2Trajectory.steps[1].players[0].measurements);
@@ -73,6 +74,38 @@ test('invalid trajectories fail validation with clear errors', () => {
         initialState: {},
         steps: [{ players: [{ actorId: 'team-a-0', state: {} }] }]
     }, 'steps[0].players[0].action is required');
+
+    assertValidationFails({
+        schemaVersion: '0.1.0',
+        initialState: {},
+        steps: [{
+            players: [{
+                actorId: 'team-a-0',
+                state: {
+                    positionX: 0,
+                    positionY: 0,
+                    hp: 100,
+                    alive: true
+                },
+                action: {
+                    moveX: 0,
+                    moveY: 0,
+                    aimX: 0,
+                    aimY: 0,
+                    fire: 0
+                },
+                reason: {
+                    source: 'policy',
+                    label: 'advance',
+                    evidence: {}
+                },
+                measurements: {
+                    canFire: false,
+                    didFire: false
+                }
+            }]
+        }]
+    }, 'steps[0].players[0].state.weaponCooldownSteps is required');
 
     assertValidationFails({
         schemaVersion: '0.1.0',
