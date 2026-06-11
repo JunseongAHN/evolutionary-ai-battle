@@ -26,6 +26,7 @@ function validatePlayerState(state: unknown, path: string, errors: string[]): vo
     if (!isNumber(state.positionY)) errors.push(`${path}.state.positionY is required`);
     if (!isNumber(state.hp)) errors.push(`${path}.state.hp is required`);
     if (!isBoolean(state.alive)) errors.push(`${path}.state.alive is required`);
+    if (!isNumber(state.weaponCooldownSteps)) errors.push(`${path}.state.weaponCooldownSteps is required`);
     if ('headingX' in state && state.headingX !== undefined && !isNumber(state.headingX)) errors.push(`${path}.state.headingX must be a number`);
     if ('headingY' in state && state.headingY !== undefined && !isNumber(state.headingY)) errors.push(`${path}.state.headingY must be a number`);
     if ('velocityX' in state && state.velocityX !== undefined && !isNumber(state.velocityX)) errors.push(`${path}.state.velocityX must be a number`);
@@ -61,6 +62,9 @@ function validateMeasurements(measurements: unknown, path: string, errors: strin
         errors.push(`${path}.measurements is required`);
         return;
     }
+
+    if (!isBoolean(measurements.canFire)) errors.push(`${path}.measurements.canFire is required`);
+    if (!isBoolean(measurements.didFire)) errors.push(`${path}.measurements.didFire is required`);
 }
 
 function validateTrajectorySteps(raw: { steps: unknown[] }, errors: string[]): void {
@@ -141,6 +145,7 @@ export function createReplayStateFromStep(stepFrame: TrajectoryStep): ReplayStat
             headingY: player.state!.headingY,
             hp: player.state!.hp,
             alive: player.state!.alive,
+            weaponCooldownSteps: player.state!.weaponCooldownSteps,
             lastAction: JSON.parse(JSON.stringify(player.action)),
             reason: JSON.parse(JSON.stringify(player.reason)),
             measurements: JSON.parse(JSON.stringify(player.measurements))
