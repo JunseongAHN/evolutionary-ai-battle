@@ -4,6 +4,7 @@ import Bot from '../../engine/agents/bot';
 import Genome from '../../engine/evolution/genome';
 import Battleground from '../../engine/simulation/battleground';
 import Trainer from '../../engine/training/trainer';
+import { evaluateTrajectory } from '../../evaluation/evaluateTrajectory';
 import {
     createReplayStateFromStep,
     getPlayerFrame,
@@ -44,6 +45,125 @@ function sortAndFormatSpecies(speciesData) {
         }));
 }
 
+function createEmptySessionTotals(playerId, teamId) {
+    return {
+        playerId,
+        teamId,
+        battlesPlayed: 0,
+        totalDamageDealt: 0,
+        totalDamageTaken: 0,
+        totalSurvivalSteps: 0,
+        totalTeammateUnderPressureEvents: 0,
+        totalTeammateUnderPressureResponses: 0,
+        totalResponseRateSum: 0,
+        totalIsolationRateSum: 0,
+        totalEvaluationScoreSum: 0
+    };
+}
+
+function mergeSessionTotals(previousTotals, evaluation) {
+    const nextTotals = { ...previousTotals };
+    const playerIds = Object.keys(evaluation?.players || {});
+
+    playerIds.forEach((playerId) => {
+        const summary = evaluation?.players?.[playerId];
+        if (!summary) {
+            return;
+        }
+
+        const teamId = summary.teamId || 'unknown';
+        const current = nextTotals[playerId] || createEmptySessionTotals(playerId, teamId);
+
+        current.teamId = teamId;
+        current.battlesPlayed += 1;
+        current.totalDamageDealt += summary.player.damageDealt || 0;
+        current.totalDamageTaken += summary.player.damageTaken || 0;
+        current.totalSurvivalSteps += summary.player.survivalSteps || 0;
+        current.totalTeammateUnderPressureEvents += summary.cpc.teammateUnderPressureEvents || 0;
+        current.totalTeammateUnderPressureResponses += summary.cpc.teammateUnderPressureResponses || 0;
+        current.totalResponseRateSum += summary.cpc.teammateResponseRate || 0;
+        current.totalIsolationRateSum += summary.cpc.isolationRate || 0;
+        current.totalEvaluationScoreSum += summary.evaluationScore || 0;
+
+        nextTotals[playerId] = current;
+    });
+
+    return nextTotals;
+}
+
+function summarizeSessionTotals(sessionTotals) {
+    const players = {};
+    const teams = {};
+
+    Object.values(sessionTotals || {}).forEach((totals) => {
+        const battleCount = totals.battlesPlayed || 1;
+        const player = {
+            damageDealt: totals.totalDamageDealt,
+            damageTaken: totals.totalDamageTaken,
+            survivalSteps: totals.totalSurvivalSteps,
+        };
+
+        const cpc = {
+            teammateUnderPressureEvents: totals.totalTeammateUnderPressureEvents,
+            teammateUnderPressureResponses: totals.totalTeammateUnderPressureResponses,
+            teammateResponseRate: battleCount > 0 ? Number((totals.totalResponseRateSum / battleCount).toFixed(2)) : 0,
+            isolationRate: battleCount > 0 ? Number((totals.totalIsolationRateSum / battleCount).toFixed(2)) : 0
+        };
+
+        players[totals.playerId] = {
+            playerId: totals.playerId,
+            teamId: totals.teamId,
+            player,
+            cpc,
+            evaluationScore: battleCount > 0 ? Number((totals.totalEvaluationScoreSum / battleCount).toFixed(2)) : 0
+        };
+
+        if (!teams[totals.teamId]) {
+            teams[totals.teamId] = {
+                teamId: totals.teamId,
+                playerIds: [],
+                damageDealt: 0,
+                damageTaken: 0,
+                survivalSteps: 0,
+                avgTeammateResponseRate: 0,
+                avgIsolationRate: 0,
+                avgEvaluationScore: 0,
+                _playerCount: 0,
+                _responseRateSum: 0,
+                _isolationRateSum: 0,
+                _evaluationScoreSum: 0
+            };
+        }
+
+        const team = teams[totals.teamId];
+        team.playerIds.push(totals.playerId);
+        team.damageDealt += totals.totalDamageDealt;
+        team.damageTaken += totals.totalDamageTaken;
+        team.survivalSteps += totals.totalSurvivalSteps;
+        team._responseRateSum += cpc.teammateResponseRate;
+        team._isolationRateSum += cpc.isolationRate;
+        team._evaluationScoreSum += players[totals.playerId].evaluationScore;
+        team._playerCount += 1;
+    });
+
+    Object.values(teams).forEach((team) => {
+        team.avgTeammateResponseRate = team._playerCount > 0 ? Number((team._responseRateSum / team._playerCount).toFixed(2)) : 0;
+        team.avgIsolationRate = team._playerCount > 0 ? Number((team._isolationRateSum / team._playerCount).toFixed(2)) : 0;
+        team.avgEvaluationScore = team._playerCount > 0 ? Number((team._evaluationScoreSum / team._playerCount).toFixed(2)) : 0;
+        delete team._playerCount;
+        delete team._responseRateSum;
+        delete team._isolationRateSum;
+        delete team._evaluationScoreSum;
+    });
+
+    return {
+        trajectoryId: 'session',
+        schemaVersion: 'session',
+        players,
+        teams
+    };
+}
+
 export function useSimulation() {
     const trainerRef = useRef(new Trainer());
     const liveEnvironmentRef = useRef(new BattleEnvironmentController());
@@ -57,6 +177,7 @@ export function useSimulation() {
     const [species, setSpecies] = useState([]);
     const [speciesData, setSpeciesData] = useState(null);
     const [latestTrajectory, setLatestTrajectory] = useState(null);
+    const [currentEvaluation, setCurrentEvaluation] = useState(null);
     const [replayTrajectory, setReplayTrajectory] = useState(null);
     const [replayStepIndex, setReplayStepIndex] = useState(0);
     const [replayAutoPlay, setReplayAutoPlay] = useState(false);
@@ -64,6 +185,7 @@ export function useSimulation() {
     const [latestLiveFrame, setLatestLiveFrame] = useState(null);
     const [selectedBotId, setSelectedBotId] = useState(1);
     const [botStats, setBotStats] = useState({});
+    const [sessionTotals, setSessionTotals] = useState({});
     const [isBattleRunning, setIsBattleRunning] = useState(false);
     const [autoRunBattles, setAutoRunBattles] = useState(false);
     const [mode, setMode] = useState('live');
@@ -139,7 +261,12 @@ export function useSimulation() {
         battleground.start((results) => {
             if (!mountedRef.current) return;
 
-            setLatestTrajectory(results.trajectory);
+            const trajectory = results.trajectory;
+            const evaluation = evaluateTrajectory(trajectory);
+
+            setLatestTrajectory(trajectory);
+            setCurrentEvaluation(evaluation);
+            setSessionTotals((previousTotals) => mergeSessionTotals(previousTotals, evaluation));
             isBattleRunningRef.current = false;
             setIsBattleRunning(false);
             const fitness = Trainer.calculateBotFitnessFromResults(results, trainer.totalGenerations);
@@ -172,6 +299,7 @@ export function useSimulation() {
         if (!latestTrajectory) return;
         try {
             enterReplayMode(latestTrajectory);
+            setCurrentEvaluation(evaluateTrajectory(latestTrajectory));
         } catch (error) {
             stopReplayPlayback();
             setReplayTrajectory(null);
@@ -192,6 +320,7 @@ export function useSimulation() {
         try {
             const trajectory = await readTrajectoryFile(file);
             enterReplayMode(trajectory);
+            setCurrentEvaluation(evaluateTrajectory(trajectory));
         } catch (error) {
             stopReplayPlayback();
             setReplayTrajectory(null);
@@ -239,6 +368,10 @@ export function useSimulation() {
         setReplayAutoPlay(true);
     }, [replayAutoPlay, replayStepIndex, replayTrajectory, stopReplayPlayback]);
 
+    const resetScores = useCallback(() => {
+        setSessionTotals({});
+    }, []);
+
     useEffect(() => {
         mountedRef.current = true;
         liveEnvironmentRef.current.start(getCanvasIds('live'));
@@ -264,6 +397,11 @@ export function useSimulation() {
     const replayStepFrame = useMemo(
         () => replayTrajectory ? getStepFrame(replayTrajectory, replayStepIndex) : null,
         [replayStepIndex, replayTrajectory]
+    );
+
+    const accumulatedEvaluation = useMemo(
+        () => summarizeSessionTotals(sessionTotals),
+        [sessionTotals]
     );
 
     useEffect(() => {
@@ -305,10 +443,12 @@ export function useSimulation() {
         botIds: BOT_IDS,
         botStats,
         autoRunBattles,
+        accumulatedEvaluation,
         downloadLatestTrajectory,
         isBattleRunning,
         generation: speciesData?.totalGenerations,
         latestTrajectory,
+        currentEvaluation,
         loading,
         loadTrajectoryFile,
         loadLatestTrajectoryForReplay,
@@ -329,6 +469,7 @@ export function useSimulation() {
         setReplayStepIndex: setReplayStep,
         setSelectedBotId,
         setAutoRunBattles,
+        resetScores,
         species,
         speciesData,
         runBattleOnce: runBattle,

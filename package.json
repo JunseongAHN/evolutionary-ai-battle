@@ -10,7 +10,7 @@
   "scripts": {
     "start": "npm run compile-browser && node server.js",
     "build": "npm run compile-browser && npm run compile-node",
-    "test": "npm run compile-node && node --test dist/engine/traces/tests/trajectoryReplay.test.js dist/engine/traces/tests/trajectorySerialization.test.js dist/engine/traces/tests/trajectoryValidation.test.js",
+    "test": "npm run compile-node && node --test dist/engine/traces/tests/trajectoryReplay.test.js dist/engine/traces/tests/trajectorySerialization.test.js dist/engine/traces/tests/trajectoryValidation.test.js dist/evaluation/metrics/tests/playerMetrics.test.js dist/evaluation/metrics/tests/cpcMetrics.test.js dist/evaluation/tests/evaluateTrajectory.test.js",
     "typecheck": "tsc --noEmit",
     "compile-browser": "npx webpack --mode production",
     "compile-node": "tsc",
