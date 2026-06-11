@@ -7,6 +7,7 @@ import Vue from 'vue/dist/vue.js'
 import Bot from '../engine/agents/bot'
 import Battleground from '../engine/simulation/battleground'
 import Trainer from '../engine/training/trainer'
+import Genome from '../engine/evolution/genome'
 import { createBattleViewer } from '../features/battleViewer/view'
 
 const trainer = new Trainer();
@@ -20,7 +21,9 @@ var app = new Vue({
             species: [],
             speciesData: null,
             bot1Stats: {},
-            bot2Stats: {}
+            bot2Stats: {},
+            bot3Stats: {},
+            bot4Stats: {}
         }
     },
     methods: {
@@ -61,6 +64,18 @@ var app = new Vue({
             return {
                 lastFitness: this.bot2Stats.lastFitness || "NEW",
                 fitness: this.bot2Stats.fitness
+            }
+        },
+        bot3Info() {
+            return {
+                lastFitness: this.bot3Stats.lastFitness || "NEW",
+                fitness: this.bot3Stats.fitness
+            }
+        },
+        bot4Info() {
+            return {
+                lastFitness: this.bot4Stats.lastFitness || "NEW",
+                fitness: this.bot4Stats.fitness
             }
         }
     },
@@ -106,23 +121,30 @@ function battle(existingSpecies) {
     }
 
     /* Bot 1 is the one we're training */
-    const bot1 = new Bot(1, battleViewer);
+    const bot1 = new Bot(1, 'team-a', battleViewer);
     const bot1Genome = trainer.getTopGenome();
     bot1.loadGenome(bot1Genome);
     this.bot1Stats = bot1Genome.getStats();
+    const bot1Teammate = new Bot(2, 'team-a', battleViewer);
+    bot1Teammate.loadGenome(Genome.loadFromJSON(bot1Genome.serialize()));
+    this.bot3Stats = bot1Genome.getStats();
 
     /**
      * Bot 2 picks a random algorithm initially, and after more rounds are completed
      * it starts using genomes for its movement. 
      **/
-    const bot2 = new Bot(2, battleViewer);
+    const bot2 = new Bot(3, 'team-b', battleViewer);
     const bot2Genome = trainer.getTopGenome();
     bot2.loadGenome(bot2Genome);
     bot2.selectAIMethod(trainer.totalGenerations);
     this.bot2Stats = bot2Genome.getStats();
+    const bot2Teammate = new Bot(4, 'team-b', battleViewer);
+    bot2Teammate.loadGenome(Genome.loadFromJSON(bot2Genome.serialize()));
+    bot2Teammate.selectAIMethod(trainer.totalGenerations);
+    this.bot4Stats = bot2Genome.getStats();
 
     const battleground = new Battleground(battleViewer)
-    battleground.addBots(bot1, bot2);
+    battleground.addBots(bot1, bot1Teammate, bot2, bot2Teammate);
     battleground.start((results) => {
         /* Calculate the bots fitness using the trainer method */
         const botFitness =  Trainer.calculateBotFitnessFromResults(results, trainer.totalGenerations);
