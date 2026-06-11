@@ -31,7 +31,7 @@ function getCanvasIds(prefix) {
     };
 }
 
-function actorIdForBot(botId) {
+export function actorIdForBot(botId) {
     return botId <= 2 ? `team-a-${botId - 1}` : `team-b-${botId - 3}`;
 }
 

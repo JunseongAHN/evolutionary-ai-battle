@@ -1,7 +1,10 @@
 // @ts-nocheck
-import React, { useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import ScoreBoard from '../../features/BattleEnvironment/components/ScoreBoard';
-import { useSimulation } from './useSimulation';
+import ScenarioInspectionPanel from '../../features/BattleEnvironment/components/ScenarioInspectionPanel';
+import { scenarioById, scenarioOptions } from '../../features/BattleEnvironment/scenarioInspection/scenarioCatalog';
+import { getStepFrame } from '../../engine/traces/trajectoryReplay';
+import { actorIdForBot, useSimulation } from './useSimulation';
 
 function botLabel(botId) {
     return botId <= 2 ? `Team A - Bot ${botId}` : `Team B - Bot ${botId}`;
@@ -76,6 +79,12 @@ function BotDetails({ simulation, replay = false }) {
 export function SimulationPage() {
     const simulation = useSimulation();
     const trajectoryFileInputRef = useRef(null);
+    const [selectedScenarioId, setSelectedScenarioId] = useState('');
+    const selectedScenario = selectedScenarioId ? scenarioById[selectedScenarioId] : null;
+    const replayStepFrame = useMemo(
+        () => simulation.replayTrajectory ? getStepFrame(simulation.replayTrajectory, simulation.replayStepIndex) : null,
+        [simulation.replayStepIndex, simulation.replayTrajectory]
+    );
 
     return (
         <>
@@ -104,6 +113,17 @@ export function SimulationPage() {
                     <BotDetails simulation={simulation} />
                 </div>
                 <section className="replay-controls">
+                    <label className="replay-scenario-select">
+                        <span>Select Scenario</span>
+                        <select value={selectedScenarioId} onChange={(event) => setSelectedScenarioId(event.target.value)}>
+                            <option value="">No scenario selected</option>
+                            {scenarioOptions.map((scenario) => (
+                                <option key={scenario.value} value={scenario.value}>
+                                    {scenario.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
                     <button onClick={simulation.runBattleOnce} disabled={simulation.isBattleRunning}>
                         {simulation.isBattleRunning ? 'Battle Running...' : 'Run Battle'}
                     </button>
@@ -166,6 +186,13 @@ export function SimulationPage() {
                             />
                         </label>
                     </section>
+                    <ScenarioInspectionPanel
+                        trajectory={simulation.replayTrajectory}
+                        scenario={selectedScenario}
+                        replayStepIndex={simulation.replayStepIndex}
+                        selectedActorId={actorIdForBot(simulation.selectedBotId)}
+                        replayStepFrame={replayStepFrame}
+                    />
                 </section>
                 <ScoreBoard
                     accumulatedEvaluation={simulation.accumulatedEvaluation}
