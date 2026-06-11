@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "linear-intent-model-v0.1",
+  "modelType": "softmax_linear_classifier",
+  "input": {
+    "featureNames": [
+      "selfHpNorm",
+      "canFire",
+      "allyHpNorm",
+      "allyDistanceNorm",
+      "enemy0HpNorm",
+      "enemy0DistanceNorm",
+      "enemy1HpNorm",
+      "enemy1DistanceNorm"
+    ],
+    "featureCount": 8,
+    "featureOrderLocked": true
+  },
+  "output": {
+    "labels": [
+      "attack_nearest_enemy",
+      "support_teammate_under_pressure",
+      "reduce_isolation",
+      "retreat_when_low_hp"
+    ],
+    "labelToIndex": {
+      "attack_nearest_enemy": 0,
+      "support_teammate_under_pressure": 1,
+      "reduce_isolation": 2,
+      "retreat_when_low_hp": 3
+    },
+    "indexToLabel": {
+      "0": "attack_nearest_enemy",
+      "1": "support_teammate_under_pressure",
+      "2": "reduce_isolation",
+      "3": "retreat_when_low_hp"
+    }
+  },
+  "inference": {
+    "formula": "scores[c] = bias[c] + sum_i(weights[c][i] * featureVector[i]); predictedIndex = argmax(scores)",
+    "usesSoftmaxForConfidenceOnly": true
+  },
+  "weights": [
+    [
+      2.3617861713120596,
+      0.015834409137103624,
+      1.7937179490176836,
+      -1.6930181515812812,
+      -0.20808309154580534,
+      -1.9069870984058028,
+      -0.29839256297516104,
+      -0.3675758959270942
+    ],
+    [
+      1.2330484155535466,
+      0.13816957164413926,
+      -4.12926508482519,
+      -0.7249815052288567,
+      0.44259737080873035,
+      1.7965794408831688,
+      0.4118639665589891,
+      -0.3392863067846055
+    ],
+    [
+      0.10988128784773436,
+      -0.24977839681953073,
+      0.4925103149377638,
+      3.7053050631409343,
+      -0.9090801978708308,
+      1.6521413482981882,
+      -0.8527365834761591,
+      0.7946748273831944
+    ],
+    [
+      -3.6999358284655255,
+      0.07538778011127245,
+      1.8309536927343562,
+      -1.310669783075519,
+      0.6828923346484684,
+      -1.5381856394862665,
+      0.7530540357978658,
+      -0.09747079267672966
+    ]
+  ],
+  "bias": [
+    -0.2862796091211939,
+    1.1575525863365448,
+    -1.770946395263844,
+    0.8996734180484962
+  ],
+  "training": {
+    "trainDataset": "C:/repos/evolutionary-ai-battle/experiment/train_intent_dataset.csv",
+    "evalDataset": "C:/repos/evolutionary-ai-battle/experiment/eval_intent_dataset.csv",
+    "epochs": 1000,
+    "learningRate": 0.1,
+    "l2": 0.0,
+    "seed": 42,
+    "trainSize": 3200,
+    "evalSize": 800,
+    "trainAccuracy": 0.9825,
+    "evalAccuracy": 0.98625
+  }
+}
