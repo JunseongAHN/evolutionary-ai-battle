@@ -1,0 +1,35 @@
+{
+  "scenarioId": "direct_enemy_contact",
+  "split": "train",
+  "grid": {
+    "width": 20,
+    "height": 20
+  },
+  "thresholds": {
+    "lowHp": 35,
+    "enemyThreatRange": 5,
+    "supportRange": 4,
+    "isolationRange": 6,
+    "responseWindowSteps": 5
+  },
+  "initialState": {
+    "players": [
+      { "id": "team-a-0", "teamId": "team-a", "positionX": 5, "positionY": 5, "headingX": 1, "headingY": 0, "hp": 100, "alive": true },
+      { "id": "team-a-1", "teamId": "team-a", "positionX": 4, "positionY": 7, "headingX": 1, "headingY": 0, "hp": 100, "alive": true },
+      { "id": "team-b-0", "teamId": "team-b", "positionX": 7, "positionY": 5, "headingX": -1, "headingY": 0, "hp": 100, "alive": true },
+      { "id": "team-b-1", "teamId": "team-b", "positionX": 16, "positionY": 16, "headingX": -1, "headingY": 0, "hp": 100, "alive": true }
+    ]
+  },
+  "gt": {
+    "intent": "attack_nearest_enemy",
+    "moveTargetId": "team-b-0",
+    "aimTargetId": "team-b-0",
+    "avoidTargetId": null,
+    "fireIntent": true,
+    "expectedReasonLabels": ["attack", "engage", "pressure"]
+  },
+  "metricDirection": {
+    "damageDealt": "increase",
+    "survivalSteps": "maintain"
+  }
+}

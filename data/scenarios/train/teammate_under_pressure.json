@@ -1,0 +1,35 @@
+{
+  "scenarioId": "teammate_under_pressure",
+  "split": "train",
+  "grid": {
+    "width": 20,
+    "height": 20
+  },
+  "thresholds": {
+    "lowHp": 35,
+    "enemyThreatRange": 5,
+    "supportRange": 4,
+    "isolationRange": 6,
+    "responseWindowSteps": 5
+  },
+  "initialState": {
+    "players": [
+      { "id": "team-a-0", "teamId": "team-a", "positionX": 3, "positionY": 3, "headingX": 1, "headingY": 0, "hp": 100, "alive": true },
+      { "id": "team-a-1", "teamId": "team-a", "positionX": 6, "positionY": 3, "headingX": 1, "headingY": 0, "hp": 28, "alive": true },
+      { "id": "team-b-0", "teamId": "team-b", "positionX": 8, "positionY": 3, "headingX": -1, "headingY": 0, "hp": 100, "alive": true },
+      { "id": "team-b-1", "teamId": "team-b", "positionX": 16, "positionY": 14, "headingX": -1, "headingY": 0, "hp": 100, "alive": true }
+    ]
+  },
+  "gt": {
+    "intent": "support_teammate_under_pressure",
+    "moveTargetId": "team-a-1",
+    "aimTargetId": "team-b-0",
+    "avoidTargetId": null,
+    "fireIntent": true,
+    "expectedReasonLabels": ["support", "assist", "protect"]
+  },
+  "metricDirection": {
+    "teammateResponseRate": "increase",
+    "isolationRate": "decrease"
+  }
+}
