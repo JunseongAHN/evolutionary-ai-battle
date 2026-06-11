@@ -5,6 +5,9 @@ import ScenarioInspectionPanel from '../../features/BattleEnvironment/components
 import { scenarioById, scenarioOptions } from '../../features/BattleEnvironment/scenarioInspection/scenarioCatalog';
 import { getStepFrame } from '../../engine/traces/trajectoryReplay';
 import { actorIdForBot, useSimulation } from './useSimulation';
+import { runLinearIntentScenarioDemo } from '../../engine/policies/linearIntent/linearIntentScenarioDemo';
+import { LINEAR_INTENT_MODEL_URL } from '../../engine/policies/linearIntent/linearIntentTypes';
+import { loadLinearIntentModelFromUrl } from '../../engine/policies/linearIntent/linearIntentModel';
 
 function botLabel(botId) {
     return botId <= 2 ? `Team A - Bot ${botId}` : `Team B - Bot ${botId}`;
@@ -76,6 +79,89 @@ function BotDetails({ simulation, replay = false }) {
     );
 }
 
+function formatList(values) {
+    return values.map((value) => Number(value).toFixed(3)).join(', ');
+}
+
+function LinearIntentModelDemo() {
+    const [model, setModel] = useState(null);
+    const [loadStatus, setLoadStatus] = useState('Model not loaded');
+    const [loadError, setLoadError] = useState('');
+    const [results, setResults] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [isRunning, setIsRunning] = useState(false);
+
+    const handleLoadModel = async () => {
+        setIsLoading(true);
+        setLoadError('');
+        try {
+            const loadedModel = await loadLinearIntentModelFromUrl(LINEAR_INTENT_MODEL_URL);
+            setModel(loadedModel);
+            setLoadStatus(`Loaded ${loadedModel.schemaVersion}`);
+        } catch (error) {
+            setModel(null);
+            setLoadStatus('Model load failed');
+            setLoadError(error instanceof Error ? error.message : 'Failed to load linear intent model');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleRunDemo = () => {
+        if (!model) {
+            return;
+        }
+
+        setIsRunning(true);
+        try {
+            setResults(runLinearIntentScenarioDemo(model));
+            setLoadError('');
+        } catch (error) {
+            setLoadError(error instanceof Error ? error.message : 'Failed to run linear intent demo');
+        } finally {
+            setIsRunning(false);
+        }
+    };
+
+    return (
+        <section className="linear-intent-demo">
+            <h2>Linear Intent Model Demo</h2>
+            <p>Status: {loadStatus}</p>
+            <p>Asset URL: <code>{LINEAR_INTENT_MODEL_URL}</code></p>
+            {model && (
+                <div className="linear-intent-demo-meta">
+                    <p>Schema: {model.schemaVersion}</p>
+                    <p>Model Type: {model.modelType}</p>
+                    <p>Train Accuracy: {model.training?.trainAccuracy ?? 'n/a'}</p>
+                    <p>Eval Accuracy: {model.training?.evalAccuracy ?? 'n/a'}</p>
+                </div>
+            )}
+            {loadError && <p className="replay-error">{loadError}</p>}
+            <div className="replay-controls">
+                <button onClick={handleLoadModel} disabled={isLoading}>
+                    {isLoading ? 'Loading Model...' : 'Load Linear Intent Model'}
+                </button>
+                <button onClick={handleRunDemo} disabled={!model || isRunning}>
+                    {isRunning ? 'Running Demo...' : 'Run Scenario Demo'}
+                </button>
+            </div>
+            <div className="linear-intent-demo-results">
+                {results.map((result) => (
+                    <article className="linear-intent-demo-card" key={result.scenarioId}>
+                        <h3>{result.scenarioId}</h3>
+                        <p>Expected: {result.expectedIntent}</p>
+                        <p>Predicted: {result.predictedIntent}</p>
+                        <p>Result: {result.passed ? 'PASS' : 'FAIL'}</p>
+                        <p>Action: moveX={result.action.moveX.toFixed(3)}, moveY={result.action.moveY.toFixed(3)}, aimX={result.action.aimX.toFixed(3)}, aimY={result.action.aimY.toFixed(3)}, fire={result.action.fire}</p>
+                        <p>Scores: {formatList(result.scores)}</p>
+                        <p>Probabilities: {formatList(result.probabilities)}</p>
+                    </article>
+                ))}
+            </div>
+        </section>
+    );
+}
+
 export function SimulationPage() {
     const simulation = useSimulation();
     const trajectoryFileInputRef = useRef(null);
@@ -107,6 +193,7 @@ export function SimulationPage() {
                     ))}
                 </div>
             </section>
+            <LinearIntentModelDemo />
             <main id="battle">
                 <div className="battle-layout">
                     <BattleEnvironment botIds={simulation.botIds} prefix="live" title="Live Battle" />
