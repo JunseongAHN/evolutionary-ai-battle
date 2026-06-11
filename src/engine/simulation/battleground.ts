@@ -1,14 +1,16 @@
 // @ts-nocheck
 /**
- * The battleground class controls the updating and drawing of an invidual battle between bots. 
- * 
+ * The battleground class controls the updating and drawing of an invidual battle between bots.
+ *
  * It runs an update loop that ticks every config.tickTime milliseconds, and runs a draw loop that runs
- * as fast as your computer can handle. 
+ * as fast as your computer can handle.
  */
 import { distanceBetweenPoints } from '../../shared/math';
-import config from '../../../config/default.json'
-import log from '../../shared/logger'
-import { getAliveBots, getAliveTeamIds, isEnemy } from './teams'
+import config from '../../../config/default.json';
+import log from '../../shared/logger';
+import { getAliveBots, getAliveTeamIds, isEnemy } from './teams';
+import TraceRecorder from '../traces/traceRecorder';
+import { createDefaultDecisionReason } from '../traces/trace';
 
 const TICK_TIME = config.tickTime;
 const BOT_RADIUS = config.botSize / 2;
@@ -26,48 +28,56 @@ const NO_MOVE_TIMEOUT = config.noMoveTimeout;
 const BATTLE_TIMEOUT = config.maxRoundTime;
 
 class Battleground {
-    constructor(view = null) {
-        this.view = view;
+    constructor() {
         this.bots = [];
         this.botActions = [];
         this.bullets = [];
+        this.traceRecorder = new TraceRecorder();
+        this.trajectoryStep = 0;
         this.onEnd = null;
+        this.onFrame = null;
         this.winner = null;
+        this.endReason = 'battle_timeout';
         this.lastActionTime = null;
         this.lastBotMoveTime = null;
         this.lastShootTime = [];
     }
 
     /**
-     * Add both bots to the battleground 
-     * @param {Bot} bot1 
-     * @param {Bot} bot2 
+     * Add both bots to the battleground
+     * @param {Bot} bot1
+     * @param {Bot} bot2
      */
     addBots(...bots) {
-        this.bots.push(...bots)
+        this.bots.push(...bots);
         this.lastShootTime = this.bots.map(() => Date.now());
     }
 
     /**
-     * Initializes all the variables for the battle and starts the battleground. 
+     * Initializes all the variables for the battle and starts the battleground.
      * Sets updateBots function to run every TICK_TIME, while the update and draw
-     * functions run at 10ms to make the game look smooth. 
+     * functions run at 10ms to make the game look smooth.
      * @param {Function} onEnd - callback to call after the battle has ended
      */
-    start(onEnd) {
+    start(onEnd, onFrame = null) {
         this.onEnd = onEnd;
+        this.onFrame = onFrame;
         this.startTime = Date.now();
         this.lastUpdate = Date.now();
         this.lastActionTime = Date.now();
         this.lastBotMoveTime = Date.now();
+        this.trajectoryStep = 0;
+        this.endReason = 'battle_timeout';
+        this.traceRecorder.reset();
+        this.traceRecorder.startTrajectory(this.createTrajectoryMetadata());
+        this.emitFrame();
         this.updateBots();
         this.updateBotsInterval = setInterval(this.updateBots.bind(this), TICK_TIME);
         this.updateInterval = setInterval(this.update.bind(this), 10);
-        this.drawInterval = setInterval(this.draw.bind(this), 10);
     }
 
     /**
-     * End the battle, clearing all the update timers, calculating results and reporting those 
+     * End the battle, clearing all the update timers, calculating results and reporting those
      * results to the onEnd callback function.
      */
     end() {
@@ -75,9 +85,12 @@ class Battleground {
 
         clearInterval(this.updateBotsInterval);
         clearInterval(this.updateInterval);
-        clearInterval(this.drawInterval);
-
         this.endTime = Date.now();
+        this.traceRecorder.finishTrajectory({
+            winnerTeamId: this.winner || null,
+            endStep: this.trajectoryStep,
+            endReason: this.endReason
+        });
         const totalTime = (this.endTime - this.startTime) / 1000;
         const results = {
             startTime: this.startTime,
@@ -85,6 +98,8 @@ class Battleground {
             totalTime,
             winner: this.winner,
             winnerTeamId: this.winner,
+            endReason: this.endReason,
+            trajectory: this.traceRecorder.getTrajectory(),
             bots: this.bots.map((bot) => ({
                 id: bot.id,
                 teamId: bot.teamId,
@@ -105,9 +120,9 @@ class Battleground {
 
     /**
      * Calls the bot update function with the current game state, then retrieves the actions the bot
-     * wants to take and returns them to the calling function.  
-     * @param {Bot} bot 
-     * @param {Bot} otherBot 
+     * wants to take and returns them to the calling function.
+     * @param {Bot} bot
+     * @param {Bot} otherBot
      */
     updateBot(bot, otherBot) {
         const gameState = {
@@ -121,20 +136,17 @@ class Battleground {
                 rotation: otherBot.rotation,
                 bullets: otherBot.bullets
             }
-        }
+        };
         const botActions = bot.update(gameState);
         return botActions;
     }
 
-    /** 
+    /**
      * Main update loop for the two bots in the world. Gathers their actions which are then used
-     * in the update loop. Also keeps track of the last time bot1 (the bot we are training) 
-     * performed an action so that if it stops doing anything for a while the battlefield ends.  
+     * in the update loop. Also keeps track of the last time bot1 (the bot we are training)
+     * performed an action so that if it stops doing anything for a while the battlefield ends.
      */
     updateBots() {
-        if (this.view && typeof this.view.setBots === 'function') {
-            this.view.setBots(this.bots);
-        }
         this.bots.forEach((bot, index) => {
             const nearestEnemy = this.getNearestEnemy(bot);
             this.botActions[index] = bot.lives > 0 && nearestEnemy
@@ -142,24 +154,27 @@ class Battleground {
                 : { dx: 0, dy: 0, dh: 0, ds: false };
         });
         if (this.botDidActions(this.botActions[0])) {
-            this.lastActionTime = Date.now()
+            this.lastActionTime = Date.now();
         }
         this.checkForWinner();
         if ((Date.now() - this.lastActionTime) / 1000 > NO_ACTION_TIMEOUT) {
+            this.endReason = 'no_action_timeout';
             this.end();
         }
         if ((Date.now() - this.lastBotMoveTime) / 1000 > NO_MOVE_TIMEOUT) {
+            this.endReason = 'no_move_timeout';
             this.end();
         }
         if ((Date.now() - this.startTime) / 1000 > BATTLE_TIMEOUT) {
+            this.endReason = 'battle_timeout';
             this.end();
         }
     }
 
     /**
-     * Takes a set of actions returned from the bot.update function and determines if the bot 
-     * is actually taking any action. Returns true if the bot is doing anything, false if not.  
-     * @param {Object} botActions 
+     * Takes a set of actions returned from the bot.update function and determines if the bot
+     * is actually taking any action. Returns true if the bot is doing anything, false if not.
+     * @param {Object} botActions
      */
     botDidActions(botActions) {
         return botActions.dx != 0 || botActions.dy != 0 || botActions.dh != 0 || botActions.ds != 0;
@@ -167,10 +182,10 @@ class Battleground {
 
     /**
      * Compares the bots old position to it's new posittion. Returns true if the bot moved, false
-     * if the bot did not move.  
-     * @param {Bot} bot 
-     * @param {int} newXPos 
-     * @param {int} newYPos 
+     * if the bot did not move.
+     * @param {Bot} bot
+     * @param {int} newXPos
+     * @param {int} newYPos
      */
     botMoved(bot, newXPos, newYPos) {
         return bot.xPos != newXPos || bot.yPos != newYPos;
@@ -179,7 +194,7 @@ class Battleground {
     /**
      * The main update loop of the battlefield. Takes the actions for each bot and makes the bots
      * move around and shoot based on them. Then calculates if any bullets collided, checks lives
-     * lost, and ends the game if there is a final winner. 
+     * lost, and ends the game if there is a final winner.
      */
     update() {
         const delta = (Date.now() - this.lastUpdate) / 1000;
@@ -208,7 +223,7 @@ class Battleground {
             bot.xPos = newXPos;
             bot.yPos = newYPos;
             bot.rotation += rotation;
-            if (bot.rotation > 360)  {
+            if (bot.rotation > 360) {
                 bot.rotation -= 360;
             }
             if (bot.rotation < 0) {
@@ -221,10 +236,10 @@ class Battleground {
                 bullet.xPos += xDistance;
                 bullet.yPos += yDistance;
                 if (bullet.xPos > MAX_X_POS || bullet.xPos < 0) {
-                    bullet.dead = true
+                    bullet.dead = true;
                 }
                 if (bullet.yPos > MAX_Y_POS || bullet.yPos < 0) {
-                    bullet.dead = true
+                    bullet.dead = true;
                 }
 
                 const hitEnemy = getAliveBots(this.bots).find((otherBot) => {
@@ -234,31 +249,25 @@ class Battleground {
                 if (!hitEnemy) return;
 
                 hitEnemy.lives -= 1;
-                log.debug("Bot " + hitEnemy.id + " hit! Now has " + hitEnemy.lives + " lives left.");
+                log.debug('Bot ' + hitEnemy.id + ' hit! Now has ' + hitEnemy.lives + ' lives left.');
                 bullet.dead = true;
-                this.checkForWinner();
             });
 
             bot.bullets = bot.bullets.filter(function (bullet) { return !bullet.dead; });
-            log.debug("Bot bullets: ", bot.bullets);
+            log.debug('Bot bullets: ', bot.bullets);
 
             if (botActions.ds && bot.bullets.length < 5 && (Date.now() - this.lastShootTime[i]) >= TICK_TIME) {
                 this.lastShootTime[i] = Date.now();
                 let bullet = this.spawnBullet(bot.xPos, bot.yPos, bot.rotation);
-                log.debug("Spawning bullet: ", bullet);
+                log.debug('Spawning bullet: ', bullet);
                 botActions.ds = false;
                 bot.bullets.push(bullet);
             }
         }
-    }
 
-    /**
-     * Draws the main battlefield to the screen. Does not run in NodeJS training mode
-     */
-    draw() {
-        if (this.view) {
-            this.view.drawBattleground(this.bots);
-        }
+        this.recordTrajectoryStep();
+        this.checkForWinner();
+        this.emitFrame();
     }
 
     getNearestEnemy(bot) {
@@ -276,11 +285,112 @@ class Battleground {
         const aliveTeamIds = getAliveTeamIds(this.bots);
         if (aliveTeamIds.length === 1) {
             this.winner = aliveTeamIds[0];
+            this.endReason = 'team_eliminated';
             this.end();
         }
     }
 
-    /** 
+    createTrajectoryMetadata() {
+        const teamIds = Array.from(new Set(this.bots.map((bot) => bot.teamId)));
+        const teams = teamIds.map((teamId) => ({
+            teamId,
+            playerIds: this.bots
+                .filter((bot) => bot.teamId === teamId)
+                .map((_, index) => `${teamId}-${index}`)
+        }));
+
+        const teamCounters = {};
+        const players = this.bots.map((bot) => {
+            const teamIndex = teamCounters[bot.teamId] || 0;
+            teamCounters[bot.teamId] = teamIndex + 1;
+            return {
+                id: `${bot.teamId}-${teamIndex}`,
+                teamId: bot.teamId,
+                tacticId: null,
+                policyId: null
+            };
+        });
+
+        return {
+            trajectoryId: `battle-${Date.now()}`,
+            schemaVersion: '0.1.0',
+            scenarioId: '2v2_default',
+            seed: null,
+            createdAt: new Date().toISOString(),
+            teams,
+            players
+        };
+    }
+
+    getPlayerMeasurements(bot) {
+        const aliveBots = getAliveBots(this.bots);
+        const sameTeamBots = aliveBots.filter((otherBot) => otherBot !== bot && !isEnemy(bot, otherBot));
+        const enemyBots = aliveBots.filter((otherBot) => isEnemy(bot, otherBot));
+        const nearestDistance = (candidates) => {
+            if (!candidates.length) return 0;
+            return candidates.reduce((nearest, candidate) => {
+                const candidateDistance = distanceBetweenPoints(bot.xPos, bot.yPos, candidate.xPos, candidate.yPos);
+                if (!nearest) return candidateDistance;
+                return candidateDistance < nearest ? candidateDistance : nearest;
+            }, 0);
+        };
+
+        return {
+            positionX: bot.xPos,
+            positionY: bot.yPos,
+            hp: bot.lives,
+            nearestAllyDistance: nearestDistance(sameTeamBots),
+            nearestEnemyDistance: nearestDistance(enemyBots),
+            damageDealt: 0,
+            damageTaken: 0
+        };
+    }
+
+    recordTrajectoryStep() {
+        const playerRecords = this.bots
+            .map((bot, index) => {
+                if (bot.lives <= 0) {
+                    return null;
+                }
+
+                const teamIndex = this.bots.filter((candidate) => candidate.teamId === bot.teamId).indexOf(bot);
+                const actorId = `${bot.teamId}-${teamIndex}`;
+                return {
+                    step: this.trajectoryStep,
+                    actorId,
+                    actorTeamId: bot.teamId,
+                    action: this.botActions[index] || { dx: 0, dy: 0, dh: 0, ds: false },
+                    reason: createDefaultDecisionReason(),
+                    measurements: this.getPlayerMeasurements(bot)
+                };
+            })
+            .filter(Boolean);
+
+        this.traceRecorder.recordStep(this.trajectoryStep, Date.now() - this.startTime, playerRecords);
+        this.trajectoryStep += 1;
+    }
+
+    emitFrame() {
+        if (typeof this.onFrame === 'function') {
+            this.onFrame({
+                bots: this.bots.map((bot) => ({
+                    id: bot.id,
+                    teamId: bot.teamId,
+                    xPos: bot.xPos,
+                    yPos: bot.yPos,
+                    rotation: bot.rotation,
+                    lives: bot.lives,
+                    bullets: bot.bullets.map((bullet) => ({
+                        xPos: bullet.xPos,
+                        yPos: bullet.yPos,
+                        rotation: bullet.rotation
+                    }))
+                }))
+            });
+        }
+    }
+
+    /**
      * Returns a bullet object given a position and rotation
      */
     spawnBullet(xPos, yPos, rotation) {
@@ -290,7 +400,6 @@ class Battleground {
             rotation
         };
     }
-
 }
 
 export default Battleground;

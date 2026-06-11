@@ -1,0 +1,81 @@
+import config from '../../../config/default.json';
+import { BRAIN_CANVAS_SCALE } from '../../shared/constants';
+
+const BOT_RADIUS = config.botSize / 2;
+const BULLET_RADIUS = config.bulletSize / 2;
+
+function getCanvas(canvasId) {
+    return document.getElementById(canvasId) as HTMLCanvasElement | null;
+}
+
+export function createBattleEnvironmentView() {
+    return {
+        drawBattleGround(canvasId, boardModel) {
+            const canvas = getCanvas(canvasId);
+            if (!canvas || !canvas.getContext) return;
+
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ddffdd';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            boardModel.bots.forEach((bot) => {
+                const botColor = bot.teamId === 'team-a' ? '#ffdddd' : '#ddddff';
+                ctx.fillStyle = botColor;
+                ctx.beginPath();
+                ctx.arc(bot.xPos, bot.yPos, BOT_RADIUS, 0, 2 * Math.PI, false);
+                ctx.fill();
+
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.lineWidth = 3;
+                ctx.moveTo(bot.xPos, bot.yPos);
+                ctx.lineTo(
+                    bot.xPos + (BOT_RADIUS * Math.cos(bot.rotation * Math.PI / 180)),
+                    bot.yPos + (BOT_RADIUS * Math.sin(bot.rotation * Math.PI / 180)),
+                );
+                ctx.stroke();
+
+                ctx.fillStyle = '#000000';
+                (bot.bullets || []).forEach((bullet) => {
+                    ctx.beginPath();
+                    ctx.arc(bullet.xPos, bullet.yPos, BULLET_RADIUS, 0, 2 * Math.PI, false);
+                    ctx.fill();
+                });
+            });
+        },
+
+        drawBotBoard(canvasId, botBoardModel) {
+            const canvas = getCanvas(canvasId);
+            if (!canvas || !canvas.getContext) return;
+
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = botBoardModel.backgroundColor;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (botBoardModel.boundary && botBoardModel.boundary.length) {
+                ctx.beginPath();
+                ctx.moveTo(botBoardModel.boundary[0].xPos, botBoardModel.boundary[0].yPos);
+                botBoardModel.boundary.slice(1).forEach((point) => {
+                    ctx.lineTo(point.xPos, point.yPos);
+                });
+                ctx.closePath();
+                ctx.strokeStyle = '#333333';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+
+            botBoardModel.players.forEach((player) => {
+                ctx.fillStyle = player.color;
+                ctx.fillRect(player.xPos, player.yPos, BRAIN_CANVAS_SCALE, BRAIN_CANVAS_SCALE);
+            });
+
+            botBoardModel.bullets.forEach((bullet) => {
+                ctx.fillStyle = bullet.color;
+                ctx.fillRect(bullet.xPos, bullet.yPos, BRAIN_CANVAS_SCALE, BRAIN_CANVAS_SCALE);
+            });
+        }
+    };
+}
