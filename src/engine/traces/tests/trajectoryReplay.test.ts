@@ -73,6 +73,12 @@ test('invalid trajectories fail validation with clear errors', () => {
         initialState: {},
         steps: [{ players: [{ actorId: 'team-a-0', state: {} }] }]
     }, 'steps[0].players[0].action is required');
+
+    assertValidationFails({
+        schemaVersion: '0.1.0',
+        initialState: {},
+        steps: [{}]
+    }, 'steps[0].players must be an array');
 });
 
 test('loadTrajectoryFromObject preserves a valid object and rejects invalid input', () => {
