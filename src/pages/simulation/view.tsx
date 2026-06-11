@@ -60,7 +60,10 @@ function BotDetails({ simulation, replay = false }) {
                         </p>
                         <p>Reason: {replayPlayer.reason.label}</p>
                         <p>HP: {replayPlayer.state.hp}</p>
+                        <p>Weapon Cooldown: {replayPlayer.state.weaponCooldownSteps}</p>
                         <p>Position: {replayPlayer.state.positionX}, {replayPlayer.state.positionY}</p>
+                        <p>Can Fire: {String(replayPlayer.measurements.canFire)}</p>
+                        <p>Did Fire: {String(replayPlayer.measurements.didFire)}</p>
                         <p>Nearest Ally: {replayPlayer.measurements.nearestAllyDistance}</p>
                         <p>Nearest Enemy: {replayPlayer.measurements.nearestEnemyDistance}</p>
                     </>

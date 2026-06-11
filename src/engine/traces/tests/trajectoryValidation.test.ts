@@ -14,6 +14,13 @@ test('validateReplayableTrajectory accepts the synthetic 2v2 trajectory fixture'
     assert.deepEqual(validateReplayableTrajectory(synthetic2v2Trajectory), []);
 });
 
+test('validateReplayableTrajectory rejects players missing weaponCooldownSteps', () => {
+    const invalid = JSON.parse(JSON.stringify(synthetic2v2Trajectory));
+    delete invalid.steps[0].players[0].state.weaponCooldownSteps;
+
+    assertValidationFails(invalid, 'steps[0].players[0].state.weaponCooldownSteps is required');
+});
+
 test('validateReplayableTrajectory rejects trajectories missing replay-required fields', () => {
     assertValidationFails({ initialState: {}, steps: [] }, 'schemaVersion is required');
     assertValidationFails({ schemaVersion: '0.1.0', steps: [] }, 'initialState is required');
@@ -85,6 +92,41 @@ test('validateReplayableTrajectory rejects malformed replay state, action, reaso
             }]
         }]
     }, 'steps[0].players[0].state.positionX is required');
+
+    assertValidationFails({
+        schemaVersion: '0.1.0',
+        initialState: {},
+        steps: [{
+            step: 0,
+            players: [{
+                actorId: 'team-a-0',
+                actorTeamId: 'team-a',
+                state: {
+                    positionX: 0,
+                    positionY: 0,
+                    hp: 100,
+                    alive: true,
+                    weaponCooldownSteps: 0
+                },
+                action: {
+                    moveX: 0,
+                    moveY: 0,
+                    aimX: 0,
+                    aimY: 0,
+                    fire: 0
+                },
+                reason: {
+                    source: 'policy',
+                    label: 'advance',
+                    evidence: {}
+                },
+                measurements: {
+                    damageDealt: 0,
+                    damageTaken: 0
+                }
+            }]
+        }]
+    }, 'steps[0].players[0].measurements.canFire is required');
 
     assertValidationFails({
         schemaVersion: '0.1.0',

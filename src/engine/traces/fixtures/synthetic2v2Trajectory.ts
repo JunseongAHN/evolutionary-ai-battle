@@ -43,7 +43,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                 headingX: 1,
                 headingY: 0,
                 hp: 100,
-                alive: true
+                alive: true,
+                weaponCooldownSteps: 0
             },
             {
                 id: 'team-a-1',
@@ -53,7 +54,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                 headingX: 1,
                 headingY: 0,
                 hp: 100,
-                alive: true
+                alive: true,
+                weaponCooldownSteps: 0
             },
             {
                 id: 'team-b-0',
@@ -63,7 +65,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                 headingX: -1,
                 headingY: 0,
                 hp: 100,
-                alive: true
+                alive: true,
+                weaponCooldownSteps: 0
             },
             {
                 id: 'team-b-1',
@@ -73,7 +76,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                 headingX: -1,
                 headingY: 0,
                 hp: 100,
-                alive: true
+                alive: true,
+                weaponCooldownSteps: 0
             }
         ]
     },
@@ -99,7 +103,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0,
                         hp: 100,
                         alive: true,
-                        cooldown: 0
+                        weaponCooldownSteps: 0
                     },
                     action: {
                         moveX: 0.2,
@@ -118,6 +122,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 14,
                         targetId: 'team-b-0',
                         targetDistance: 14,
+                        canFire: false,
+                        didFire: false,
                         damageDealt: 0,
                         damageTaken: 0
                     }
@@ -134,7 +140,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0,
                         hp: 100,
                         alive: true,
-                        cooldown: 0
+                        weaponCooldownSteps: 0
                     },
                     action: {
                         moveX: 0.2,
@@ -153,6 +159,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 18,
                         targetId: 'team-b-1',
                         targetDistance: 18,
+                        canFire: false,
+                        didFire: false,
                         damageDealt: 0,
                         damageTaken: 0
                     }
@@ -169,7 +177,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0,
                         hp: 100,
                         alive: true,
-                        cooldown: 0
+                        weaponCooldownSteps: 0
                     },
                     action: {
                         moveX: -0.2,
@@ -188,6 +196,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 14,
                         targetId: 'team-a-0',
                         targetDistance: 14,
+                        canFire: false,
+                        didFire: false,
                         damageDealt: 0,
                         damageTaken: 0
                     }
@@ -204,7 +214,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0,
                         hp: 100,
                         alive: true,
-                        cooldown: 0
+                        weaponCooldownSteps: 0
                     },
                     action: {
                         moveX: -0.1,
@@ -223,6 +233,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 18,
                         targetId: 'team-a-1',
                         targetDistance: 18,
+                        canFire: false,
+                        didFire: false,
                         damageDealt: 0,
                         damageTaken: 0
                     }
@@ -250,7 +262,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0.1,
                         hp: 100,
                         alive: true,
-                        cooldown: 0
+                        weaponCooldownSteps: 0
                     },
                     action: {
                         moveX: 0.1,
@@ -269,6 +281,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 10,
                         targetId: 'team-b-0',
                         targetDistance: 10,
+                        canFire: true,
+                        didFire: true,
                         damageDealt: 1,
                         damageTaken: 0
                     }
@@ -285,7 +299,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0,
                         hp: 98,
                         alive: true,
-                        cooldown: 1
+                        weaponCooldownSteps: 1
                     },
                     action: {
                         moveX: 0,
@@ -304,6 +318,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 12,
                         targetId: 'team-b-1',
                         targetDistance: 12,
+                        canFire: false,
+                        didFire: false,
                         damageDealt: 0,
                         damageTaken: 2
                     }
@@ -320,7 +336,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0.1,
                         hp: 99,
                         alive: true,
-                        cooldown: 0
+                        weaponCooldownSteps: 0
                     },
                     action: {
                         moveX: -0.1,
@@ -339,6 +355,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 10,
                         targetId: 'team-a-0',
                         targetDistance: 10,
+                        canFire: true,
+                        didFire: true,
                         damageDealt: 1,
                         damageTaken: 0
                     }
@@ -355,7 +373,7 @@ export const synthetic2v2Trajectory: Trajectory = {
                         velocityY: 0,
                         hp: 100,
                         alive: true,
-                        cooldown: 1
+                        weaponCooldownSteps: 1
                     },
                     action: {
                         moveX: 0,
@@ -374,6 +392,8 @@ export const synthetic2v2Trajectory: Trajectory = {
                         nearestEnemyDistance: 12,
                         targetId: 'team-a-1',
                         targetDistance: 12,
+                        canFire: false,
+                        didFire: false,
                         damageDealt: 0,
                         damageTaken: 1
                     }
