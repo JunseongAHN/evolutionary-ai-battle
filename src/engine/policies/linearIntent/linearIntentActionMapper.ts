@@ -1,12 +1,8 @@
 import { LinearIntentAction, LinearIntentFeatureInput, LinearIntentLabel } from './linearIntentTypes';
-import { canLinearIntentFireAt, linearIntentDistance, normalizeVector } from './linearIntentFeatures';
+import { linearIntentDistance, normalizeVector } from './linearIntentFeatures';
 import config from '../../../../config/default.json';
 
 const AIM_FIRE_TOLERANCE_DEGREES = 10;
-
-function clampFire(value: boolean): number {
-    return value ? 1 : 0;
-}
 
 function getSelf(input: LinearIntentFeatureInput): { x: number; y: number } {
     return { x: input.self.x, y: input.self.y };
@@ -50,6 +46,7 @@ export function mapLinearIntentToAction(intent: LinearIntentLabel, input: Linear
                 moveY: move.y,
                 aimX: aim.x,
                 aimY: aim.y,
+                // action.fire is policy intent. The battle system decides whether a shot is emitted.
                 fire: 1,
                 fireWhileAiming: true
             };
@@ -62,7 +59,7 @@ export function mapLinearIntentToAction(intent: LinearIntentLabel, input: Linear
                 moveY: move.y,
                 aimX: aim.x,
                 aimY: aim.y,
-                fire: clampFire(canLinearIntentFireAt(input, enemyClosestToAlly))
+                fire: 1
             };
         }
         case 'reduce_isolation': {
@@ -84,7 +81,7 @@ export function mapLinearIntentToAction(intent: LinearIntentLabel, input: Linear
                 moveY: -towardEnemy.y,
                 aimX: aim.x,
                 aimY: aim.y,
-                fire: clampFire(canLinearIntentFireAt(input, nearestEnemy))
+                fire: 1
             };
         }
         default:

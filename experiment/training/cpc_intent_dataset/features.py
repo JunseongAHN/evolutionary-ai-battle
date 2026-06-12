@@ -19,7 +19,6 @@ DEFAULT_THRESHOLDS = {
 
 FEATURE_NAMES = [
     "selfHpNorm",
-    "canFire",
     "allyHpNorm",
     "allyDistanceNorm",
     "enemy0HpNorm",
@@ -30,7 +29,6 @@ FEATURE_NAMES = [
 
 FEATURE_TYPES = {
     "selfHpNorm": "normalized",
-    "canFire": "binary",
     "allyHpNorm": "normalized",
     "allyDistanceNorm": "normalized",
     "enemy0HpNorm": "normalized",
@@ -106,7 +104,6 @@ def extract_model_features(state: Dict[str, object], thresholds: Dict[str, int] 
 
     features = {
         "selfHpNorm": normalize_hp(self_player.get("hp", 0)),
-        "canFire": can_fire_from_cooldown(int(self_player.get("weaponCooldownSteps", 0)), bool(self_player.get("alive", False))),
         "allyHpNorm": normalize_hp(ally_player.get("hp", 0)),
         "allyDistanceNorm": normalize_distance(ally_distance, scale, scale),
         "enemy0HpNorm": normalize_hp(enemy0.get("hp", 0)),
@@ -119,4 +116,3 @@ def extract_model_features(state: Dict[str, object], thresholds: Dict[str, int] 
         if isinstance(value, float) and not isfinite(value):
             raise ValueError(f"feature {key} is not finite")
     return features
-

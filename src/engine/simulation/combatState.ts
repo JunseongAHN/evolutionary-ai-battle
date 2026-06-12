@@ -15,13 +15,15 @@ export function advanceWeaponCooldown(currentCooldown: number): number {
 export function resolveFireAttempt({
     alive,
     attemptedFire,
-    weaponCooldownSteps
+    weaponCooldownSteps,
+    systemAllowed = true
 }: {
     alive: boolean;
     attemptedFire: number;
     weaponCooldownSteps: number;
+    systemAllowed?: boolean;
 }): { canFire: boolean; didFire: boolean; nextWeaponCooldownSteps: number } {
-    const canFire = alive && attemptedFire > FIRE_THRESHOLD && weaponCooldownSteps <= 0;
+    const canFire = alive && attemptedFire > FIRE_THRESHOLD && weaponCooldownSteps <= 0 && systemAllowed;
     return {
         canFire,
         didFire: canFire,

@@ -280,10 +280,17 @@ class Battleground {
             if (bot.lives <= 0 || !botActions) {
                 continue;
             }
+            const nearestEnemy = this.getNearestEnemy(bot);
+            const enemyInRange = Boolean(nearestEnemy)
+                && distanceBetweenPoints(bot.xPos, bot.yPos, nearestEnemy.xPos, nearestEnemy.yPos) <= config.neuralNetworkSquareSize * 5;
+            const systemAllowed = bot.policyMode === 'linear_intent' ? enemyInRange : true;
+            const weaponReady = (this.weaponCooldownSteps[i] || 0) <= 0;
+            const systemCanFire = bot.lives > 0 && weaponReady && systemAllowed;
             const fireResolution = resolveFireAttempt({
                 alive: bot.lives > 0,
                 attemptedFire: botActions.ds ? 1 : 0,
-                weaponCooldownSteps: this.weaponCooldownSteps[i] || 0
+                weaponCooldownSteps: this.weaponCooldownSteps[i] || 0,
+                systemAllowed
             });
 
             if (fireResolution.didFire) {
@@ -295,6 +302,9 @@ class Battleground {
 
             this.stepCombat[i] = {
                 canFire: fireResolution.canFire,
+                weaponReady,
+                enemyInRange,
+                systemCanFire,
                 didFire: fireResolution.didFire
             };
         }
@@ -525,6 +535,9 @@ class Battleground {
             // TODO: expose the policy's selected target to calculate aim alignment.
             aimTargetAlignment: null,
             canFire: this.stepCombat?.[botIndex]?.canFire || false,
+            weaponReady: this.stepCombat?.[botIndex]?.weaponReady || false,
+            enemyInRange: this.stepCombat?.[botIndex]?.enemyInRange || false,
+            systemCanFire: this.stepCombat?.[botIndex]?.systemCanFire || false,
             didFire: this.stepCombat?.[botIndex]?.didFire || false,
             damageDealt: this.stepDamage?.[actorId]?.dealt || 0,
             damageTaken: this.stepDamage?.[actorId]?.taken || 0

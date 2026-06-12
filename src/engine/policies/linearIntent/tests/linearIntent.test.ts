@@ -84,13 +84,14 @@ function assertLinearIntentAction(action: {
 test('linear intent model loads with the expected I/O schema', () => {
     const model = loadLinearIntentModelFromFile(getDefaultLinearIntentModelPath());
 
-    assert.equal(model.schemaVersion, 'linear-intent-model-v0.1');
+    assert.equal(model.schemaVersion, 'linear-intent-model-v0.2');
     assert.deepEqual(model.input.featureNames, LINEAR_INTENT_FEATURE_NAMES);
-    assert.equal(model.input.featureNames.length, 8);
+    assert.equal(model.input.featureNames.length, 7);
+    assert.equal(model.input.featureNames.includes('canFire' as never), false);
     assert.equal(model.output.labels.length, 4);
 });
 
-test('runtime preprocessing preserves HP, fire readiness, distance, and enemy ordering', () => {
+test('runtime preprocessing preserves tactical HP, distance, and enemy ordering without canFire', () => {
     const baseState = {
         gridWidth: 1000,
         gridHeight: 500,
@@ -102,9 +103,12 @@ test('runtime preprocessing preserves HP, fire readiness, distance, and enemy or
 
     const farSnapshot = buildLinearIntentFeatureSnapshot(baseState);
     assert.equal(farSnapshot.featureVector[0], 1);
-    assert.equal(farSnapshot.featureVector[1], 0);
-    assert.notEqual(farSnapshot.featureVector[3], farSnapshot.featureVector[5]);
+    assert.equal(farSnapshot.featureVector.length, 7);
+    assert.notEqual(farSnapshot.featureVector[2], farSnapshot.featureVector[4]);
     assert.ok(farSnapshot.featureVector.every(Number.isFinite));
+    assert.equal(LINEAR_INTENT_FEATURE_NAMES.includes('canFire' as never), false);
+    assert.equal(farSnapshot.rawFeatures.weaponReady, true);
+    assert.equal(farSnapshot.rawFeatures.enemyInRange, false);
     assert.equal(mapLinearIntentToAction('attack_nearest_enemy', baseState).fire, 1);
 
     const inRangeState = {
@@ -112,15 +116,16 @@ test('runtime preprocessing preserves HP, fire readiness, distance, and enemy or
         enemy0: { ...baseState.enemy0, x: LINEAR_INTENT_ATTACK_RANGE - 1 }
     };
     const inRangeSnapshot = buildLinearIntentFeatureSnapshot(inRangeState);
-    assert.equal(inRangeSnapshot.featureVector[1], 1);
+    assert.equal(inRangeSnapshot.rawFeatures.enemyInRange, true);
+    assert.deepEqual(inRangeSnapshot.featureVector.length, farSnapshot.featureVector.length);
     assert.equal(mapLinearIntentToAction('attack_nearest_enemy', inRangeState).fire, 1);
 
     const missingEnemySnapshot = buildLinearIntentFeatureSnapshot({
         ...baseState,
         enemy1: { hp: 0, x: 0, y: 0, missing: true }
     });
-    assert.equal(missingEnemySnapshot.featureVector[6], 0);
-    assert.equal(missingEnemySnapshot.featureVector[7], 1);
+    assert.equal(missingEnemySnapshot.featureVector[5], 0);
+    assert.equal(missingEnemySnapshot.featureVector[6], 1);
     assert.ok(Object.values(missingEnemySnapshot.rawFeatures).every((value) => typeof value === 'boolean' || Number.isFinite(value)));
 
     const actor = { teamId: 'team-b', xPos: 901, yPos: 470, lives: 5 };
@@ -135,10 +140,8 @@ test('runtime preprocessing preserves HP, fire readiness, distance, and enemy or
     const snapshot = buildLinearIntentFeatureSnapshot(state);
 
     assert.equal(state.enemy0.x, nearerEnemy.xPos);
-    assert.deepEqual(snapshot.featureVector.slice(0, 8).filter((_, index) => [0, 2, 4, 6].includes(index)), [1, 1, 1, 1]);
-    assert.equal(snapshot.featureVector[1], 0);
-    assert.ok(snapshot.featureVector.slice(3).some((value) => value !== 1));
-    assert.notDeepEqual(snapshot.featureVector, [0.05, 1, 0.05, 1, 0.05, 1, 0.05, 1]);
+    assert.deepEqual(snapshot.featureVector.filter((_, index) => [0, 1, 3, 5].includes(index)), [1, 1, 1, 1]);
+    assert.ok(snapshot.featureVector.slice(2).some((value) => value !== 1));
 });
 
 test('intent action rotates toward its aim target before firing', () => {
@@ -175,8 +178,9 @@ test('intent action rotates toward its aim target before firing', () => {
 
 test('eval_intent_dataset.csv rows can be preprocessed, predicted, and postprocessed', () => {
     const model = loadLinearIntentModelFromFile(getDefaultLinearIntentModelPath());
-    const csvPath = path.resolve(process.cwd(), 'experiment/eval_intent_dataset.csv');
+    const csvPath = path.resolve(process.cwd(), 'experiment/eval_intent_dataset_v0_2.csv');
     const rows = parseCsv(fs.readFileSync(csvPath, 'utf8'));
+    assert.equal('canFire' in rows[0], false);
 
     let correct = 0;
     let evaluated = 0;
@@ -304,7 +308,11 @@ test('environment-like states go through preprocess, model predict, and postproc
         assert.equal(decision.reason.source, 'linear_intent_model');
         assert.equal(decision.reason.label, decision.intent);
         assert.deepEqual(decision.reason.evidence.featureNames, LINEAR_INTENT_FEATURE_NAMES);
+        assert.equal(decision.reason.evidence.schemaVersion, 'linear-intent-model-v0.2');
+        assert.equal((decision.reason.evidence.featureVector as number[]).length, 7);
         assert.ok(decision.reason.evidence.rawFeatures);
+        assert.equal(typeof (decision.reason.evidence.rawFeatures as any).weaponReady, 'boolean');
+        assert.equal(typeof (decision.reason.evidence.rawFeatures as any).enemyInRange, 'boolean');
         assert.ok(model.output.labels.includes(decision.intent));
         assertProbabilities(decision.probabilities);
 

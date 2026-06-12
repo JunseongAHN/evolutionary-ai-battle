@@ -99,6 +99,9 @@ export interface PlayerMeasurements {
     nearestAllyDistance: number;
     nearestEnemyDistance: number;
     canFire: boolean;
+    weaponReady?: boolean;
+    enemyInRange?: boolean;
+    systemCanFire?: boolean;
     didFire: boolean;
     targetId?: string | null;
     targetDistance?: number | null;

@@ -22,13 +22,12 @@ Feature order is fixed and exported in `feature_schema.json`.
 Model features, in exact order:
 
 1. `selfHpNorm`
-2. `canFire`
-3. `allyHpNorm`
-4. `allyDistanceNorm`
-5. `enemy0HpNorm`
-6. `enemy0DistanceNorm`
-7. `enemy1HpNorm`
-8. `enemy1DistanceNorm`
+2. `allyHpNorm`
+3. `allyDistanceNorm`
+4. `enemy0HpNorm`
+5. `enemy0DistanceNorm`
+6. `enemy1HpNorm`
+7. `enemy1DistanceNorm`
 
 The JSON samples also include `predicateDebug` for validation/debugging only. It is not written to the CSV.
 
@@ -65,7 +64,6 @@ The self-check validates:
 - `featureVector` matches the exported feature order
 - no NaN or Infinity values exist
 - scenario constraints hold for each family
-- canFire is present in both states across the dataset
 - enemy HP and enemy1 distance are not constant
 - teammate_under_pressure covers a wider ally distance range
 - JSON arrays are parseable by `JSON.parse`

@@ -28,6 +28,7 @@ export function buildLinearIntentDecision(
             source: 'linear_intent_model',
             label: prediction.intent,
             evidence: {
+                schemaVersion: model.schemaVersion,
                 intentIndex: prediction.intentIndex,
                 intent: prediction.intent,
                 scores: prediction.scores,

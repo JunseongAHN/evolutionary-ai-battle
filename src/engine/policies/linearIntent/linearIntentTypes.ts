@@ -1,11 +1,10 @@
 import { DecisionReason } from '../../traces/trace';
 
-export const LINEAR_INTENT_SCHEMA_VERSION = 'linear-intent-model-v0.1';
-export const LINEAR_INTENT_MODEL_URL = '/models/linear_intent_model.json';
+export const LINEAR_INTENT_SCHEMA_VERSION = 'linear-intent-model-v0.2';
+export const LINEAR_INTENT_MODEL_URL = '/models/linear-intent-model-v0.2.json';
 
 export const LINEAR_INTENT_FEATURE_NAMES = [
     'selfHpNorm',
-    'canFire',
     'allyHpNorm',
     'allyDistanceNorm',
     'enemy0HpNorm',

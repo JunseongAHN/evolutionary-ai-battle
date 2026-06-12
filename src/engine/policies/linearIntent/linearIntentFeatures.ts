@@ -47,11 +47,6 @@ function normalizeEntityDistance(distance: number, scale: number): number {
     return Number.isFinite(distance) ? clamp01(distance / scale) : 1;
 }
 
-export function canLinearIntentFireAt(input: LinearIntentFeatureInput, target: LinearIntentEntityState): boolean {
-    const weaponReady = input.self.weaponCooldownSteps !== undefined && input.self.weaponCooldownSteps <= 0;
-    return weaponReady && !target.missing && target.hp > 0 && entityDistance(input.self, target) <= LINEAR_INTENT_ATTACK_RANGE;
-}
-
 export function buildLinearIntentFeatureSnapshot(input: LinearIntentFeatureInput): {
     featureVector: number[];
     rawFeatures: LinearIntentRawFeatures;
@@ -68,7 +63,6 @@ export function buildLinearIntentFeatureSnapshot(input: LinearIntentFeatureInput
     return {
         featureVector: [
             toNormHp(input.self.hp),
-            weaponReady && enemyInRange ? 1 : 0,
             input.ally.missing ? 0 : toNormHp(input.ally.hp),
             normalizeEntityDistance(allyDistance, normalizationScale),
             input.enemy0.missing ? 0 : toNormHp(input.enemy0.hp),

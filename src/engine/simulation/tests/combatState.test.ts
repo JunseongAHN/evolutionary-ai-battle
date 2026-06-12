@@ -49,3 +49,15 @@ test('resolveFireAttempt keeps attempted fire separate from actual fire', () => 
     assert.equal(deadPlayer.canFire, false);
     assert.equal(deadPlayer.didFire, false);
 });
+
+test('resolveFireAttempt treats system permission separately from policy fire intent', () => {
+    const blockedBySystem = resolveFireAttempt({
+        alive: true,
+        attemptedFire: 1,
+        weaponCooldownSteps: 0,
+        systemAllowed: false
+    });
+
+    assert.equal(blockedBySystem.canFire, false);
+    assert.equal(blockedBySystem.didFire, false);
+});
