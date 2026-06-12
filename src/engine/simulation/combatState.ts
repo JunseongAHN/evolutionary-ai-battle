@@ -1,6 +1,8 @@
+import config from '../../../config/default.json';
+
 export const MAX_HP = 100;
-export const BULLET_DAMAGE = 10;
-export const FIRE_COOLDOWN_STEPS = 5;
+export const BULLET_DAMAGE = config.bulletDamage;
+export const FIRE_COOLDOWN_STEPS = config.fireCooldownSteps;
 export const FIRE_THRESHOLD = 0.5;
 
 export function advanceWeaponCooldown(currentCooldown: number): number {

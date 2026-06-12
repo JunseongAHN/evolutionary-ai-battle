@@ -1,6 +1,6 @@
 import { createBattleEnvironmentView } from './view';
 import { createLiveGameBoardViewModel, createTrajectoryGameBoardViewModel } from './logic/gameBoard';
-import { createLiveBotBoardViewModel, createTrajectoryBotBoardViewModel } from './logic/botBoard';
+import { createTrajectoryBotBoardViewModel } from './logic/botBoard';
 
 export default class BattleEnvironmentController {
     view: ReturnType<typeof createBattleEnvironmentView>;
@@ -40,11 +40,17 @@ export default class BattleEnvironmentController {
     setLiveFrame(bots) {
         this.currentMode = 'live';
         this.currentFrame = bots;
+        if (this.running) {
+            this.render();
+        }
     }
 
     setTrajectoryFrame(stepFrame) {
         this.currentMode = 'trajectory';
         this.currentFrame = stepFrame;
+        if (this.running) {
+            this.render();
+        }
     }
 
     render() {
@@ -67,14 +73,6 @@ export default class BattleEnvironmentController {
 
     drawLiveBattle(bots) {
         this.view.drawBattleGround(this.canvasIds.battle, createLiveGameBoardViewModel(bots));
-        bots.forEach((bot) => {
-            try {
-                const botCanvasId = this.canvasIds.bot(bot.id);
-                this.view.drawBotBoard(botCanvasId, createLiveBotBoardViewModel(bot, bots));
-            } catch (error) {
-                console.error(`Bot ${bot.id} brain render failed`, error);
-            }
-        });
     }
 
     drawTrajectoryBattle(stepFrame) {

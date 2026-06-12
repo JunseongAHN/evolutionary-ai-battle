@@ -15,6 +15,9 @@ import Genome from '../evolution/genome';
 import config from '../../../config/default.json';
 import { createBotBrainInputState } from './botPerception';
 import { degreesToRadians } from '../../shared/math';
+import { buildLinearIntentFeatureStateForBot } from '../policies/linearIntent/linearIntentBattleAdapter';
+import { decideLinearIntentAction } from '../policies/linearIntent/linearIntentPolicy';
+import { linearIntentActionToBattleAction } from '../policies/linearIntent/linearIntentActionMapper';
 const debug = require("debug")("eai:bot");
 
 import {
@@ -45,10 +48,22 @@ class Bot {
         this.lives = STARTING_LIVES;
         this.genome = new Genome();
         this.outputMethod = null;
+        this.policyMode = 'genetic';
+        this.linearIntentModel = null;
+        this.lastDecision = null;
+        this.lastTrajectoryAction = null;
     }
 
     loadGenome(genome) {
         this.genome = genome;
+    }
+
+    setPolicyMode(policyMode) {
+        this.policyMode = policyMode;
+    }
+
+    setLinearIntentModel(model) {
+        this.linearIntentModel = model;
     }
     
     /**
@@ -274,7 +289,30 @@ class Bot {
      * 
      * @param {BattleInfo} inputs 
      */
-    update(inputs) {
+    update(inputs, battleContext = null) {
+        this.lastDecision = null;
+        this.lastTrajectoryAction = null;
+        if (this.policyMode === 'none') {
+            return {
+                dx: 0,
+                dy: 0,
+                dh: 0,
+                ds: false
+            };
+        }
+        if (this.policyMode === 'linear_intent' && this.linearIntentModel && battleContext) {
+            const featureState = buildLinearIntentFeatureStateForBot(this, battleContext);
+            const decision = decideLinearIntentAction(this.linearIntentModel, featureState);
+            this.lastDecision = decision;
+            this.lastTrajectoryAction = {
+                moveX: decision.action.moveX,
+                moveY: decision.action.moveY,
+                aimX: decision.action.aimX,
+                aimY: decision.action.aimY,
+                fire: decision.action.fire
+            };
+            return linearIntentActionToBattleAction(decision.action, this.rotation);
+        }
         this.updateNetwork(inputs);
         this.calculateWeights();
         return this.createOutputObject()
