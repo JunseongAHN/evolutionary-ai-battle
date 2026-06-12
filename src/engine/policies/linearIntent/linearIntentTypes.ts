@@ -63,6 +63,7 @@ export interface LinearIntentEntityState {
     x: number;
     y: number;
     weaponCooldownSteps?: number;
+    missing?: boolean;
 }
 
 export interface LinearIntentFeatureInput {
@@ -97,6 +98,24 @@ export interface LinearIntentAction {
     aimX: number;
     aimY: number;
     fire: number;
+    fireWhileAiming?: boolean;
+}
+
+export interface LinearIntentRawFeatures {
+    selfHp: number;
+    maxHp: number;
+    allyHp: number;
+    allyDistance: number;
+    enemy0Hp: number;
+    enemy0Distance: number;
+    enemy1Hp: number;
+    enemy1Distance: number;
+    weaponReady: boolean;
+    enemyInRange: boolean;
+    nearestEnemyDistance: number;
+    attackRange: number;
+    arenaDiagonal: number;
+    distanceNormalizationScale: number;
 }
 
 export interface LinearIntentScenarioState extends LinearIntentFeatureInput {

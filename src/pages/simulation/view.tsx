@@ -8,24 +8,105 @@ import { actorIdForBot, useSimulation } from './useSimulation';
 import { runLinearIntentScenarioDemo } from '../../engine/policies/linearIntent/linearIntentScenarioDemo';
 import { LINEAR_INTENT_MODEL_URL } from '../../engine/policies/linearIntent/linearIntentTypes';
 import { loadLinearIntentModelFromUrl } from '../../engine/policies/linearIntent/linearIntentModel';
+import { BOT_POLICY_TYPES, formatBotPolicy } from './botPolicyConfig';
 
 function botLabel(botId) {
     return botId <= 2 ? `Team A - Bot ${botId}` : `Team B - Bot ${botId}`;
 }
 
-function BattleEnvironment({ botIds, prefix, title }) {
+function BattleEnvironment({ botIds, prefix, title, showBrains = true, children = null }) {
     return (
         <section className="battle-environment">
             <h2>{title}</h2>
             <canvas className="battleground-canvas" id={`${prefix}-battleground`} width="1000" height="500" />
-            <div className="brain-grid">
-                {botIds.map((botId) => (
-                    <div className="brain-board" key={botId}>
-                        <h4>{botLabel(botId)} Brain</h4>
-                        <canvas id={`${prefix}-bot${botId}brain`} width="400" height="400" />
-                    </div>
-                ))}
+            {children}
+            {showBrains && (
+                <div className="brain-grid">
+                    {botIds.map((botId) => (
+                        <div className="brain-board" key={botId}>
+                            <h4>{botLabel(botId)} Brain</h4>
+                            <canvas id={`${prefix}-bot${botId}brain`} width="400" height="400" />
+                        </div>
+                    ))}
+                </div>
+            )}
+        </section>
+    );
+}
+
+function LiveBattleSummary({ simulation }) {
+    const bots = simulation.latestLiveFrame?.bots || [];
+    const result = simulation.latestBattleResult;
+    const playerRows = Object.values(simulation.currentEvaluation?.players || {});
+    const teamRows = Object.values(simulation.currentEvaluation?.teams || {});
+
+    return (
+        <section className="score-board live-battle-summary">
+            <h3>{simulation.isBattleRunning ? 'Live HP' : 'Battle Summary'}</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(120px, 1fr))', gap: '0.75rem' }}>
+                {simulation.botIds.map((botId) => {
+                    const bot = bots.find((candidate) => candidate.id === botId);
+                    return (
+                        <article className="selected-bot-panel" key={botId}>
+                            <strong>{botLabel(botId)}</strong>
+                            <p>HP: {bot?.lives ?? '-'}</p>
+                            <p>Status: {bot ? (bot.lives > 0 ? 'Alive' : 'Eliminated') : 'Waiting'}</p>
+                        </article>
+                    );
+                })}
             </div>
+            {!simulation.isBattleRunning && result && (
+                <>
+                    <p>
+                        Winner: {result.winnerTeamId || 'Draw'} | Reason: {result.endReason} | Duration: {result.totalTime.toFixed(1)}s
+                    </p>
+                    <div className="score-board-table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Team</th>
+                                    <th>Damage Dealt</th>
+                                    <th>Damage Taken</th>
+                                    <th>Avg Eval</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {teamRows.map((team) => (
+                                    <tr key={team.teamId}>
+                                        <td>{team.teamId}</td>
+                                        <td>{team.damageDealt}</td>
+                                        <td>{team.damageTaken}</td>
+                                        <td>{team.avgEvaluationScore}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="score-board-table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Player</th>
+                                    <th>Damage Dealt</th>
+                                    <th>Damage Taken</th>
+                                    <th>Eval Score</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {playerRows.map((player) => (
+                                    <tr key={player.playerId}>
+                                        <td>{player.playerId}</td>
+                                        <td>{player.player.damageDealt}</td>
+                                        <td>{player.player.damageTaken}</td>
+                                        <td>{player.evaluationScore}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
+            {!simulation.isBattleRunning && !result && <p>Run a battle to see its summary.</p>}
         </section>
     );
 }
@@ -33,12 +114,16 @@ function BattleEnvironment({ botIds, prefix, title }) {
 function BotDetails({ simulation, replay = false }) {
     const stats = simulation.selectedStats;
     const replayPlayer = simulation.selectedReplayPlayer;
+    const liveBot = simulation.latestLiveFrame?.bots?.find((bot) => bot.id === simulation.selectedBotId);
+    const liveDecision = liveBot?.decision;
+    const selectedPolicy = simulation.botPolicyConfig?.[simulation.selectedBotId] || BOT_POLICY_TYPES.genome;
 
     return (
         <section className="species-stats">
             <p>Generation: {simulation.generation}</p>
             <p>Max Fitness: {simulation.maxFitness}</p>
             <p>Mode: {replay ? 'Replay' : 'Live'}</p>
+            <p>Selected Policy: {formatBotPolicy(selectedPolicy)}</p>
             <h3>{replay ? 'Replay Competitor Details' : 'Live Competitor Details'}</h3>
             <div className="bot-button-row">
                 {simulation.botIds.map((botId) => (
@@ -56,6 +141,16 @@ function BotDetails({ simulation, replay = false }) {
                 <h4>{botLabel(simulation.selectedBotId)}</h4>
                 <p>Previous Fitness: {stats.lastFitness ?? 'NEW'}</p>
                 <p>Current Fitness: {stats.fitness ?? 'NEW'}</p>
+                {!replay && selectedPolicy === BOT_POLICY_TYPES.linearIntent && liveDecision && (
+                    <>
+                        <p>Policy: {liveBot.policyMode}</p>
+                        <p>Intent: {liveDecision.intent}</p>
+                        <p>Reason: {liveDecision.reason?.label}</p>
+                        <p>Action: moveX={liveDecision.action?.moveX}, moveY={liveDecision.action?.moveY}, aimX={liveDecision.action?.aimX}, aimY={liveDecision.action?.aimY}, fire={liveDecision.action?.fire}</p>
+                        <p>Scores: {formatList(liveDecision.scores || [])}</p>
+                        <p>Probabilities: {formatList(liveDecision.probabilities || [])}</p>
+                    </>
+                )}
                 {replay && replayPlayer && (
                     <>
                         <p>Replay Step: {simulation.replayStepIndex}</p>
@@ -193,10 +288,71 @@ export function SimulationPage() {
                     ))}
                 </div>
             </section>
-            <LinearIntentModelDemo />
+            <section className="linear-intent-controls">
+                <h2>Battle Policy</h2>
+                <p>Current Assignment Summary:</p>
+                <p>
+                    Bot 1: {formatBotPolicy(simulation.botPolicyConfig[1])} | Bot 2: {formatBotPolicy(simulation.botPolicyConfig[2])} |
+                    Bot 3: {formatBotPolicy(simulation.botPolicyConfig[3])} | Bot 4: {formatBotPolicy(simulation.botPolicyConfig[4])}
+                </p>
+                <div className="replay-controls">
+                    <button onClick={simulation.setAllGenomePolicies} type="button">
+                        All Genome
+                    </button>
+                    <button onClick={simulation.setAllLinearPolicies} type="button">
+                        All Linear
+                    </button>
+                    <button onClick={simulation.setAllNonePolicies} type="button">
+                        All None
+                    </button>
+                    <button onClick={simulation.setTeamALinearVsTeamBGenome} type="button">
+                        Team A Linear vs Team B Genome
+                    </button>
+                    <button onClick={simulation.setTeamAGenomeVsTeamBLinear} type="button">
+                        Team A Genome vs Team B Linear
+                    </button>
+                </div>
+                <div className="bot-button-row">
+                    {[1, 2, 3, 4].map((botId) => (
+                        <label key={botId} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <span>Bot {botId} Policy</span>
+                            <select
+                                value={simulation.botPolicyConfig[botId]}
+                                onChange={(event) => simulation.setBotPolicyForBot(botId, event.target.value)}
+                            >
+                                <option value={BOT_POLICY_TYPES.genome}>Genome</option>
+                                <option value={BOT_POLICY_TYPES.linearIntent}>Linear Intent</option>
+                                <option value={BOT_POLICY_TYPES.none}>None</option>
+                            </select>
+                        </label>
+                    ))}
+                </div>
+                <div className="replay-controls">
+                    <button onClick={simulation.loadLinearIntentModel} disabled={simulation.linearModelLoading}>
+                        {simulation.linearModelLoading ? 'Loading Linear Model...' : 'Load Linear Intent Model'}
+                    </button>
+                    <button
+                        onClick={simulation.runBattleOnce}
+                        disabled={simulation.isBattleRunning || (simulation.runBattleRequiresLinearModel && !simulation.linearIntentModel)}
+                    >
+                        {simulation.isBattleRunning ? 'Battle Running...' : 'Run Battle'}
+                    </button>
+                </div>
+                <p>Model Status: {simulation.linearModelLoadStatus}</p>
+                {simulation.linearModelError && <p className="replay-error">{simulation.linearModelError}</p>}
+                {simulation.linearIntentModel && (
+                    <div>
+                        <p>Schema: {simulation.linearIntentModel.schemaVersion}</p>
+                        <p>Train Accuracy: {simulation.linearIntentModel.training?.trainAccuracy ?? 'n/a'}</p>
+                        <p>Eval Accuracy: {simulation.linearIntentModel.training?.evalAccuracy ?? 'n/a'}</p>
+                    </div>
+                )}
+            </section>
             <main id="battle">
                 <div className="battle-layout">
-                    <BattleEnvironment botIds={simulation.botIds} prefix="live" title="Live Battle" />
+                    <BattleEnvironment botIds={simulation.botIds} prefix="live" title="Live Battle" showBrains={false}>
+                        <LiveBattleSummary simulation={simulation} />
+                    </BattleEnvironment>
                     <BotDetails simulation={simulation} />
                 </div>
                 <section className="replay-controls">
@@ -211,9 +367,6 @@ export function SimulationPage() {
                             ))}
                         </select>
                     </label>
-                    <button onClick={simulation.runBattleOnce} disabled={simulation.isBattleRunning}>
-                        {simulation.isBattleRunning ? 'Battle Running...' : 'Run Battle'}
-                    </button>
                     <button onClick={simulation.downloadLatestTrajectory} disabled={!simulation.latestTrajectory}>
                         Download Trajectory
                     </button>
@@ -287,6 +440,7 @@ export function SimulationPage() {
                     onResetScores={simulation.resetScores}
                 />
             </main>
+            <LinearIntentModelDemo />
         </>
     );
 }

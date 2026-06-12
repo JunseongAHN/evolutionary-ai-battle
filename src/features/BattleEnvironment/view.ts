@@ -38,6 +38,20 @@ export function createBattleEnvironmentView() {
                 );
                 ctx.stroke();
 
+                const hpRatio = Math.max(0, Math.min(1, bot.lives / config.startingLives));
+                const hpBarWidth = 54;
+                const hpBarHeight = 7;
+                const hpBarX = bot.xPos - (hpBarWidth / 2);
+                const hpBarY = bot.yPos > 48 ? bot.yPos - BOT_RADIUS - 20 : bot.yPos + BOT_RADIUS + 10;
+                ctx.fillStyle = '#333333';
+                ctx.fillRect(hpBarX - 1, hpBarY - 1, hpBarWidth + 2, hpBarHeight + 2);
+                ctx.fillStyle = hpRatio > 0.5 ? '#2eaf55' : (hpRatio > 0.2 ? '#e2a72e' : '#d13c3c');
+                ctx.fillRect(hpBarX, hpBarY, hpBarWidth * hpRatio, hpBarHeight);
+                ctx.fillStyle = '#111111';
+                ctx.font = 'bold 11px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(`Bot ${bot.id} HP ${bot.lives}/${config.startingLives}`, bot.xPos, hpBarY - 4);
+
                 ctx.fillStyle = '#000000';
                 (bot.bullets || []).forEach((bullet) => {
                     ctx.beginPath();
@@ -45,6 +59,7 @@ export function createBattleEnvironmentView() {
                     ctx.fill();
                 });
             });
+            ctx.textAlign = 'start';
         },
 
         drawBotBoard(canvasId, botBoardModel) {
