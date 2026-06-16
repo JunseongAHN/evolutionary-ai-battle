@@ -75,6 +75,10 @@ export function createBattleEnvironmentView() {
             botBoardModel.bullets.forEach((bullet) => {
                 ctx.fillStyle = bullet.color;
                 ctx.fillRect(bullet.xPos, bullet.yPos, BRAIN_CANVAS_SCALE, BRAIN_CANVAS_SCALE);
+                if (bullet.label) {
+                    ctx.font = '9px sans-serif';
+                    ctx.fillText(bullet.label, bullet.xPos + BRAIN_CANVAS_SCALE + 2, bullet.yPos + BRAIN_CANVAS_SCALE);
+                }
             });
         }
     };

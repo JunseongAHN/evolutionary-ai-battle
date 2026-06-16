@@ -45,7 +45,13 @@ function createBotBoardViewModel(bot, bots) {
         })),
         bullets: bots.flatMap((player) => (player.bullets || []).map((bullet) => ({
             ...projectPointForBot(bot, bullet.xPos, bullet.yPos),
-            color: '#000000'
+            id: bullet.id,
+            shooterId: bullet.shooterId || player.id,
+            shooterTeamId: bullet.shooterTeamId || player.teamId,
+            label: bullet.shooterId || String(player.id),
+            color: (bullet.shooterId || player.id) === bot.id
+                ? '#00aa00'
+                : ((bullet.shooterTeamId || player.teamId) === bot.teamId ? '#cc6600' : '#000000')
         })))
     };
 }
@@ -55,14 +61,23 @@ export function createLiveBotBoardViewModel(bot, bots) {
 }
 
 export function createTrajectoryBotBoardViewModel(playerRecord) {
+    const projectiles = playerRecord.stepFrame.environment?.projectiles || [];
     const players = playerRecord.stepFrame.players.map((player) => ({
         id: player.actorId,
         teamId: player.actorTeamId,
-        xPos: player.measurements.positionX,
-        yPos: player.measurements.positionY,
-        rotation: 0,
-        lives: player.measurements.hp,
-        bullets: []
+        xPos: player.state.positionX,
+        yPos: player.state.positionY,
+        rotation: Math.atan2(player.state.headingY, player.state.headingX) * 180 / Math.PI,
+        lives: player.state.hp,
+        bullets: projectiles
+            .filter((projectile) => projectile.shooterId === player.actorId)
+            .map((projectile) => ({
+                id: projectile.id,
+                shooterId: projectile.shooterId,
+                shooterTeamId: projectile.shooterTeamId,
+                xPos: projectile.positionX,
+                yPos: projectile.positionY
+            }))
     }));
     const bot = players.find((player) => player.id === playerRecord.actorId);
 

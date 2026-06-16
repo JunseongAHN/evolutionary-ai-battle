@@ -1,58 +1,65 @@
 import {
     createEmptyTrajectory,
-    createDefaultDecisionReason,
-    PlayerStepRecord,
+    InitialState,
     Trajectory,
+    TrajectoryEvent,
     TrajectoryMetadata,
     TrajectoryResult,
     TrajectoryStep
 } from './trace';
 
-export default class TraceRecorder {
-    private trajectory: Trajectory | null;
+function cloneJson<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+}
 
-    constructor() {
-        this.trajectory = null;
-    }
+export default class TraceRecorder {
+    private trajectory: Trajectory | null = null;
+    private pendingEvents = new Map<number, TrajectoryEvent[]>();
 
     startTrajectory(metadata: TrajectoryMetadata) {
-        this.trajectory = createEmptyTrajectory(metadata);
+        this.pendingEvents.clear();
+        this.trajectory = createEmptyTrajectory(cloneJson(metadata));
     }
 
-    recordStep(step: number, timeMs: number, playerRecords: PlayerStepRecord[]) {
+    recordInitialState(initialState: InitialState) {
         if (!this.trajectory) return;
+        this.trajectory.initialState = cloneJson(initialState);
+    }
 
-        const stepRecord: TrajectoryStep = {
-            step,
-            timeMs,
-            players: playerRecords.map((playerRecord) => ({
-                ...playerRecord,
-                reason: playerRecord.reason || createDefaultDecisionReason()
-            }))
-        };
+    recordStep(stepRecord: TrajectoryStep) {
+        if (!this.trajectory) return;
+        const pendingEvents = this.pendingEvents.get(stepRecord.step) || [];
+        this.trajectory.steps.push(cloneJson({
+            ...stepRecord,
+            events: [...(stepRecord.events || []), ...pendingEvents]
+        }));
+        this.pendingEvents.delete(stepRecord.step);
+    }
 
-        this.trajectory.steps.push(stepRecord);
+    recordEvent(step: number, event: TrajectoryEvent) {
+        if (!this.trajectory) return;
+        const matchingStep = this.trajectory.steps.find((candidate) => candidate.step === step);
+        if (matchingStep) {
+            matchingStep.events = matchingStep.events || [];
+            matchingStep.events.push(cloneJson(event));
+            return;
+        }
+        const events = this.pendingEvents.get(step) || [];
+        events.push(cloneJson(event));
+        this.pendingEvents.set(step, events);
     }
 
     finishTrajectory(result: TrajectoryResult) {
         if (!this.trajectory) return;
-        this.trajectory.result = result;
+        this.trajectory.result = cloneJson(result);
     }
 
-    getTrajectory() {
-        return this.trajectory ? {
-            ...this.trajectory,
-            steps: this.trajectory.steps.map((step) => ({
-                ...step,
-                players: step.players.map((player) => ({
-                    ...player,
-                    reason: player.reason || createDefaultDecisionReason()
-                }))
-            }))
-        } : null;
+    getTrajectory(): Trajectory | null {
+        return this.trajectory ? cloneJson(this.trajectory) : null;
     }
 
     reset() {
         this.trajectory = null;
+        this.pendingEvents.clear();
     }
 }

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useRef } from 'react';
 import { useSimulation } from './useSimulation';
 
 function botLabel(botId) {
@@ -31,6 +31,7 @@ function BotDetails({ simulation, replay = false }) {
         <section className="species-stats">
             <p>Generation: {simulation.generation}</p>
             <p>Max Fitness: {simulation.maxFitness}</p>
+            <p>Mode: {replay ? 'Replay' : 'Live'}</p>
             <h3>{replay ? 'Replay Competitor Details' : 'Live Competitor Details'}</h3>
             <div className="bot-button-row">
                 {simulation.botIds.map((botId) => (
@@ -52,12 +53,13 @@ function BotDetails({ simulation, replay = false }) {
                     <>
                         <p>Replay Step: {simulation.replayStepIndex}</p>
                         <p>
-                            Action: dx={replayPlayer.action.dx}, dy={replayPlayer.action.dy},
-                            dh={replayPlayer.action.dh}, shoot={String(replayPlayer.action.ds)}
+                            Action: moveX={replayPlayer.action.moveX}, moveY={replayPlayer.action.moveY},
+                            aimX={replayPlayer.action.aimX}, aimY={replayPlayer.action.aimY},
+                            fire={replayPlayer.action.fire}
                         </p>
                         <p>Reason: {replayPlayer.reason.label}</p>
-                        <p>HP: {replayPlayer.measurements.hp}</p>
-                        <p>Position: {replayPlayer.measurements.positionX}, {replayPlayer.measurements.positionY}</p>
+                        <p>HP: {replayPlayer.state.hp}</p>
+                        <p>Position: {replayPlayer.state.positionX}, {replayPlayer.state.positionY}</p>
                         <p>Nearest Ally: {replayPlayer.measurements.nearestAllyDistance}</p>
                         <p>Nearest Enemy: {replayPlayer.measurements.nearestEnemyDistance}</p>
                     </>
@@ -69,6 +71,7 @@ function BotDetails({ simulation, replay = false }) {
 
 export function SimulationPage() {
     const simulation = useSimulation();
+    const trajectoryFileInputRef = useRef(null);
 
     return (
         <>
@@ -96,17 +99,55 @@ export function SimulationPage() {
                     <BattleEnvironment botIds={simulation.botIds} prefix="live" title="Live Battle" />
                     <BotDetails simulation={simulation} />
                 </div>
+                <section className="replay-controls">
+                    <button onClick={simulation.runBattleOnce} disabled={simulation.isBattleRunning}>
+                        {simulation.isBattleRunning ? 'Battle Running...' : 'Run Battle'}
+                    </button>
+                    <button onClick={simulation.downloadLatestTrajectory} disabled={!simulation.latestTrajectory}>
+                        Download Trajectory
+                    </button>
+
+                    <input
+                        ref={trajectoryFileInputRef}
+                        accept="application/json,.json"
+                        hidden
+                        type="file"
+                        onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) {
+                                simulation.loadTrajectoryFile(file);
+                            }
+                            event.target.value = '';
+                        }}
+                    />
+                </section>
                 <section className="replay-section">
                     <div className="battle-layout">
-                        <BattleEnvironment botIds={simulation.botIds} prefix="replay" title="Last Trajectory" />
+                        <BattleEnvironment botIds={simulation.botIds} prefix="replay" title="Replay Viewer" />
                         <BotDetails simulation={simulation} replay />
                     </div>
                     <section className="replay-controls">
+                        {simulation.replayError && <p className="replay-error">{simulation.replayError}</p>}
                         <button onClick={simulation.loadLatestTrajectoryForReplay} disabled={!simulation.latestTrajectory}>
-                            Load Last Trajectory
+                            Replay Latest Battle
+                        </button>
+                        <button
+                            onClick={() => trajectoryFileInputRef.current?.click()}
+                            type="button"
+                        >
+                            Import Trajectory JSON
+                        </button>
+                        <button onClick={simulation.goToPreviousReplayStep} disabled={!simulation.replayTrajectory?.steps.length}>
+                            Prev
+                        </button>
+                        <button onClick={simulation.goToNextReplayStep} disabled={!simulation.replayTrajectory?.steps.length}>
+                            Next
+                        </button>
+                        <button onClick={simulation.resetReplay} disabled={!simulation.replayTrajectory?.steps.length}>
+                            Reset
                         </button>
                         <button onClick={simulation.toggleReplayPlayback} disabled={!simulation.replayTrajectory?.steps.length}>
-                            {simulation.replayAutoPlay ? 'Pause Replay' : 'Play Replay'}
+                            {simulation.replayAutoPlay ? 'Pause' : 'Play'}
                         </button>
                         <label className="replay-slider">
                             <span>Step {simulation.replayStepIndex} / {simulation.replayMaxStep}</span>

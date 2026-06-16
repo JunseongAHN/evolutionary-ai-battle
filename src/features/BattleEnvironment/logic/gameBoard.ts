@@ -14,16 +14,27 @@ export function createLiveGameBoardViewModel(bots) {
 }
 
 export function createTrajectoryGameBoardViewModel(stepFrame) {
+    const projectiles = stepFrame.environment?.projectiles || [];
+
     return {
         mode: 'trajectory',
         bots: stepFrame.players.map((player) => ({
             id: player.actorId,
             teamId: player.actorTeamId,
-            xPos: player.measurements.positionX,
-            yPos: player.measurements.positionY,
-            rotation: 0,
-            lives: player.measurements.hp,
-            bullets: []
+            xPos: player.state.positionX,
+            yPos: player.state.positionY,
+            rotation: Math.atan2(player.state.headingY, player.state.headingX) * 180 / Math.PI,
+            lives: player.state.hp,
+            bullets: projectiles
+                .filter((projectile) => projectile.shooterId === player.actorId)
+                .map((projectile) => ({
+                    id: projectile.id,
+                    shooterId: projectile.shooterId,
+                    shooterTeamId: projectile.shooterTeamId,
+                    xPos: projectile.positionX,
+                    yPos: projectile.positionY,
+                    rotation: Math.atan2(projectile.headingY, projectile.headingX) * 180 / Math.PI
+                }))
         }))
     };
 }
