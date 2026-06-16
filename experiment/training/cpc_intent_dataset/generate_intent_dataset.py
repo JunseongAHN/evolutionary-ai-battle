@@ -113,7 +113,6 @@ def _finalize_stat_summary(summary):
 
 def _build_distribution_summary(samples: List[Dict[str, object]]) -> Dict[str, object]:
     summary = {
-        "canFireByScenario": {},
         "allyDistanceNormByScenario": {},
         "enemy0HpNorm": _init_stat_summary(),
         "enemy1HpNorm": _init_stat_summary(),
@@ -122,9 +121,6 @@ def _build_distribution_summary(samples: List[Dict[str, object]]) -> Dict[str, o
 
     for sample in samples:
         scenario_id = sample["scenarioId"]
-        scenario_bucket = summary["canFireByScenario"].setdefault(scenario_id, {"canFire0": 0, "canFire1": 0})
-        scenario_bucket["canFire1" if sample["features"]["canFire"] == 1 else "canFire0"] += 1
-
         ally_bucket = summary["allyDistanceNormByScenario"].setdefault(scenario_id, _init_stat_summary())
         _update_stat_summary(ally_bucket, sample["features"]["allyDistanceNorm"])
         _update_stat_summary(summary["enemy0HpNorm"], sample["features"]["enemy0HpNorm"])
@@ -132,7 +128,6 @@ def _build_distribution_summary(samples: List[Dict[str, object]]) -> Dict[str, o
         _update_stat_summary(summary["enemy1DistanceNorm"], sample["features"]["enemy1DistanceNorm"])
 
     return {
-        "canFireByScenario": summary["canFireByScenario"],
         "allyDistanceNormByScenario": {scenario_id: _finalize_stat_summary(bucket) for scenario_id, bucket in summary["allyDistanceNormByScenario"].items()},
         "enemy0HpNorm": _finalize_stat_summary(summary["enemy0HpNorm"]),
         "enemy1HpNorm": _finalize_stat_summary(summary["enemy1HpNorm"]),
@@ -233,9 +228,6 @@ def self_check(output_dir: Path | None = None) -> None:
         assert sample["predicateDebug"] == _compute_predicate_debug(sample["state"])
         _assert_finite_numbers(sample)
 
-    can_fire_values = [sample["features"]["canFire"] for sample in combined]
-    assert 0 in can_fire_values and 1 in can_fire_values
-
     scenario_checks = {
         "direct_enemy_contact": lambda sample: sample["predicateDebug"]["enemyNearby"] == 1,
         "teammate_under_pressure": lambda sample: sample["predicateDebug"]["allyUnderPressure"] == 1,
@@ -246,12 +238,7 @@ def self_check(output_dir: Path | None = None) -> None:
         scenario_samples = [sample for sample in combined if sample["scenarioId"] == scenario_id]
         assert scenario_samples, scenario_id
         assert any(check(sample) for sample in scenario_samples), scenario_id
-        if len(scenario_samples) >= 4:
-            scenario_can_fire = [sample["features"]["canFire"] for sample in scenario_samples]
-            assert 0 in scenario_can_fire and 1 in scenario_can_fire, scenario_id
-
     distribution_summary = manifest_loaded["distributionSummary"]
-    assert distribution_summary["canFireByScenario"]
     assert distribution_summary["enemy0HpNorm"]["min"] is not None
     assert distribution_summary["enemy0HpNorm"]["max"] is not None
     assert distribution_summary["enemy1HpNorm"]["min"] is not None
@@ -295,7 +282,6 @@ def self_check(output_dir: Path | None = None) -> None:
     assert manifest_loaded["sampleCounts"]["byLabel"]
     assert manifest_loaded["sampleCounts"]["bySplit"]["train"] > 0
     assert manifest_loaded["sampleCounts"]["bySplit"]["eval"] > 0
-    assert manifest_loaded["distributionSummary"]["canFireByScenario"]
 
     if temp_dir is not None:
         temp_dir.cleanup()

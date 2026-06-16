@@ -9,5 +9,5 @@ export function loadLinearIntentModelFromFile(filePath: string): LinearIntentMod
 }
 
 export function getDefaultLinearIntentModelPath(): string {
-    return path.resolve(process.cwd(), 'experiment/linear_intent_model.json');
+    return path.resolve(process.cwd(), 'public/models/linear-intent-model-v0.2.json');
 }

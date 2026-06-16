@@ -13,6 +13,17 @@ import {
 } from '../../engine/traces/trajectoryReplay';
 import BattleEnvironmentController from '../../features/BattleEnvironment/controller';
 import { downloadTrajectoryJson, readTrajectoryFile } from '../../features/BattleEnvironment/trajectoryFileIO';
+import { loadLinearIntentModelFromUrl } from '../../engine/policies/linearIntent/linearIntentModel';
+import {
+    BOT_POLICY_TYPES,
+    createDefaultBotPolicyConfig,
+    formatBotPolicy,
+    requiresLinearIntentModel,
+    setAllBotPolicies,
+    setBotPolicy,
+    setTeamAPolicy,
+    setTeamBPolicy
+} from './botPolicyConfig';
 
 const BOT_IDS = [1, 2, 3, 4];
 
@@ -177,6 +188,7 @@ export function useSimulation() {
     const [species, setSpecies] = useState([]);
     const [speciesData, setSpeciesData] = useState(null);
     const [latestTrajectory, setLatestTrajectory] = useState(null);
+    const [latestBattleResult, setLatestBattleResult] = useState(null);
     const [currentEvaluation, setCurrentEvaluation] = useState(null);
     const [replayTrajectory, setReplayTrajectory] = useState(null);
     const [replayStepIndex, setReplayStepIndex] = useState(0);
@@ -189,6 +201,11 @@ export function useSimulation() {
     const [isBattleRunning, setIsBattleRunning] = useState(false);
     const [autoRunBattles, setAutoRunBattles] = useState(false);
     const [mode, setMode] = useState('live');
+    const [botPolicyConfig, setBotPolicyConfig] = useState(createDefaultBotPolicyConfig());
+    const [linearIntentModel, setLinearIntentModel] = useState(null);
+    const [linearModelLoadStatus, setLinearModelLoadStatus] = useState('Linear model not loaded');
+    const [linearModelError, setLinearModelError] = useState('');
+    const [linearModelLoading, setLinearModelLoading] = useState(false);
 
     const stopReplayPlayback = useCallback(() => {
         if (replayTimerRef.current) {
@@ -207,6 +224,64 @@ export function useSimulation() {
         }
     }, []);
 
+    const loadLinearIntentModel = useCallback(async () => {
+        setLinearModelLoading(true);
+        setLinearModelError('');
+        setLinearModelLoadStatus('Loading linear intent model...');
+        try {
+            const model = await loadLinearIntentModelFromUrl();
+            setLinearIntentModel(model);
+            setLinearModelLoadStatus(`Loaded ${model.schemaVersion}`);
+            return model;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to load linear intent model';
+            setLinearIntentModel(null);
+            setLinearModelLoadStatus('Linear model load failed');
+            setLinearModelError(message);
+            throw error;
+        } finally {
+            setLinearModelLoading(false);
+        }
+    }, []);
+
+    const setBotPolicyForBot = useCallback((botId, policy) => {
+        setBotPolicyConfig((current) => setBotPolicy(current, botId, policy));
+    }, []);
+
+    const setAllGenomePolicies = useCallback(() => {
+        setBotPolicyConfig(setAllBotPolicies(BOT_POLICY_TYPES.genome));
+    }, []);
+
+    const setAllLinearPolicies = useCallback(() => {
+        setBotPolicyConfig(setAllBotPolicies(BOT_POLICY_TYPES.linearIntent));
+    }, []);
+
+    const setAllNonePolicies = useCallback(() => {
+        setBotPolicyConfig(setAllBotPolicies(BOT_POLICY_TYPES.none));
+    }, []);
+
+    const setTeamALinearVsTeamBGenome = useCallback(() => {
+        setBotPolicyConfig(setTeamAPolicy(BOT_POLICY_TYPES.linearIntent));
+    }, []);
+
+    const setTeamAGenomeVsTeamBLinear = useCallback(() => {
+        setBotPolicyConfig(setTeamBPolicy(BOT_POLICY_TYPES.linearIntent));
+    }, []);
+
+    useEffect(() => {
+        if (requiresLinearIntentModel(botPolicyConfig) && !linearIntentModel && !linearModelLoading) {
+            loadLinearIntentModel().catch(() => {
+                // Error state already set by the loader.
+            });
+        }
+    }, [botPolicyConfig, linearIntentModel, linearModelLoading, loadLinearIntentModel]);
+
+    useEffect(() => {
+        if (!requiresLinearIntentModel(botPolicyConfig)) {
+            setLinearModelError('');
+        }
+    }, [botPolicyConfig]);
+
     const enterReplayMode = useCallback((trajectory) => {
         const loadedTrajectory = loadTrajectoryFromObject(trajectory);
         stopReplayPlayback();
@@ -217,12 +292,19 @@ export function useSimulation() {
         return loadedTrajectory;
     }, [stopReplayPlayback]);
 
-    const runBattle = useCallback((existingSpecies = null) => {
+    const runBattle = useCallback(function runBattleInternal(existingSpecies = null) {
         if (!mountedRef.current) return;
         if (isBattleRunningRef.current) return;
 
         const trainer = trainerRef.current;
         const speciesToUse = existingSpecies || selectedSpeciesRef.current;
+
+        const usesLinearIntent = requiresLinearIntentModel(botPolicyConfig);
+        if (usesLinearIntent && !linearIntentModel) {
+            setLinearModelError('Load the linear intent model before running a linear intent battle.');
+            return;
+        }
+
         if (speciesToUse) {
             trainer.loadSpeciesFromJSON(speciesToUse);
         } else {
@@ -232,9 +314,17 @@ export function useSimulation() {
         isBattleRunningRef.current = true;
         setIsBattleRunning(true);
         setMode('live');
+        setLatestBattleResult(null);
+        setCurrentEvaluation(null);
 
         const bot1 = new Bot(1, 'team-a');
         const bot1Genome = trainer.getTopGenome();
+        if (!bot1Genome) {
+            isBattleRunningRef.current = false;
+            setIsBattleRunning(false);
+            setLinearModelError('No genome was available for the selected species. Try another species or retrain.');
+            return;
+        }
         bot1.loadGenome(bot1Genome);
 
         const bot2 = new Bot(2, 'team-a');
@@ -242,12 +332,26 @@ export function useSimulation() {
 
         const bot3 = new Bot(3, 'team-b');
         const bot3Genome = trainer.getTopGenome();
+        if (!bot3Genome) {
+            isBattleRunningRef.current = false;
+            setIsBattleRunning(false);
+            setLinearModelError('No opponent genome was available for the selected species. Try another species or retrain.');
+            return;
+        }
         bot3.loadGenome(bot3Genome);
         bot3.selectAIMethod(trainer.totalGenerations);
 
         const bot4 = new Bot(4, 'team-b');
         bot4.loadGenome(Genome.loadFromJSON(bot3Genome.serialize()));
         bot4.selectAIMethod(trainer.totalGenerations);
+
+        [bot1, bot2, bot3, bot4].forEach((bot) => {
+            const policy = botPolicyConfig[bot.id];
+            bot.setPolicyMode(policy);
+            if (policy === BOT_POLICY_TYPES.linearIntent) {
+                bot.setLinearIntentModel(linearIntentModel);
+            }
+        });
 
         setBotStats({
             1: bot1Genome.getStats(),
@@ -265,6 +369,7 @@ export function useSimulation() {
             const evaluation = evaluateTrajectory(trajectory);
 
             setLatestTrajectory(trajectory);
+            setLatestBattleResult(results);
             setCurrentEvaluation(evaluation);
             setSessionTotals((previousTotals) => mergeSessionTotals(previousTotals, evaluation));
             isBattleRunningRef.current = false;
@@ -278,12 +383,12 @@ export function useSimulation() {
             }
 
             if (autoRunBattles) {
-                window.setTimeout(() => runBattle(speciesToUse), 0);
+                window.setTimeout(() => runBattleInternal(speciesToUse), 0);
             }
         }, (frame) => {
             if (mountedRef.current) setLatestLiveFrame(frame);
         });
-    }, [autoRunBattles]);
+    }, [autoRunBattles, botPolicyConfig, linearIntentModel]);
 
     const selectSpecies = useCallback(async (speciesId) => {
         setLoading(true);
@@ -293,6 +398,10 @@ export function useSimulation() {
         setSpeciesData(selectedSpecies);
         setLoading(false);
         runBattle(selectedSpecies);
+    }, [runBattle]);
+
+    const runBattleOnce = useCallback(() => {
+        runBattle();
     }, [runBattle]);
 
     const loadLatestTrajectoryForReplay = useCallback(() => {
@@ -438,6 +547,7 @@ export function useSimulation() {
     const selectedReplayPlayer = replayStepFrame
         ? getPlayerFrame(replayStepFrame, actorIdForBot(selectedBotId))
         : null;
+    const runBattleRequiresLinearModel = requiresLinearIntentModel(botPolicyConfig);
 
     return {
         botIds: BOT_IDS,
@@ -448,12 +558,21 @@ export function useSimulation() {
         isBattleRunning,
         generation: speciesData?.totalGenerations,
         latestTrajectory,
+        latestBattleResult,
+        latestLiveFrame,
         currentEvaluation,
         loading,
         loadTrajectoryFile,
         loadLatestTrajectoryForReplay,
+        loadLinearIntentModel,
+        linearIntentModel,
+        linearModelError,
+        linearModelLoadStatus,
+        linearModelLoading,
         maxFitness: speciesData?.maxFitness,
         mode,
+        botPolicyConfig,
+        runBattleRequiresLinearModel,
         replayAutoPlay,
         replayError,
         replayMaxStep: replayTrajectory ? Math.max(replayTrajectory.steps.length - 1, 0) : 0,
@@ -468,11 +587,17 @@ export function useSimulation() {
         selectedStats,
         setReplayStepIndex: setReplayStep,
         setSelectedBotId,
+        setBotPolicyForBot,
+        setAllGenomePolicies,
+        setAllLinearPolicies,
+        setAllNonePolicies,
+        setTeamALinearVsTeamBGenome,
+        setTeamAGenomeVsTeamBLinear,
         setAutoRunBattles,
         resetScores,
         species,
         speciesData,
-        runBattleOnce: runBattle,
+        runBattleOnce,
         toggleReplayPlayback
     };
 }

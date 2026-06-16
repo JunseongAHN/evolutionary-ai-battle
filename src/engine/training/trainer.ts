@@ -40,19 +40,28 @@ export default class Trainer {
         }
     }
 
-    /** 
+    /**
      * Load Species from JSON data
      */
     loadSpeciesFromJSON(data) {
-        if (!data.species || !Array.isArray(data.species)) {
-            console.error("Could not load JSON file. data.species not found");
+        const speciesData = Array.isArray(data?.species)
+            ? data.species
+            : (data?.genomes ? [data] : null);
+
+        if (!speciesData || !speciesData.length) {
+            console.error("Could not load JSON file. Expected a wrapped trainer payload or a species object.");
             return;
         }
-        data.species.forEach((speciesData) => {
-            const species = Species.loadFromJSON(speciesData);
+        this.species = [];
+        speciesData.forEach((singleSpeciesData) => {
+            const species = Species.loadFromJSON(singleSpeciesData);
             this.species.push(species);
         });
-        this.totalGenerations = data.totalGenerations;
+        if (typeof data?.totalGenerations === 'number') {
+            this.totalGenerations = data.totalGenerations;
+        } else if (typeof data?.latestGeneration === 'number') {
+            this.totalGenerations = data.latestGeneration;
+        }
     }
 
     /**

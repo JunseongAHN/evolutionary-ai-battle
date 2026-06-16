@@ -32,6 +32,24 @@ const NO_ACTION_TIMEOUT = config.noActionTimeout;
 const NO_MOVE_TIMEOUT = config.noMoveTimeout;
 const BATTLE_TIMEOUT = config.maxRoundTime;
 
+function distanceFromPointToSegment(pointX, pointY, startX, startY, endX, endY) {
+    const segmentX = endX - startX;
+    const segmentY = endY - startY;
+    const segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
+    if (segmentLengthSquared === 0) {
+        return distanceBetweenPoints(pointX, pointY, startX, startY);
+    }
+
+    const projection = ((pointX - startX) * segmentX + (pointY - startY) * segmentY) / segmentLengthSquared;
+    const clampedProjection = Math.max(0, Math.min(1, projection));
+    return distanceBetweenPoints(
+        pointX,
+        pointY,
+        startX + clampedProjection * segmentX,
+        startY + clampedProjection * segmentY
+    );
+}
+
 class Battleground {
     constructor() {
         this.bots = [];
@@ -147,7 +165,14 @@ class Battleground {
                 bullets: otherBot.bullets
             }
         };
-        const botActions = bot.update(gameState);
+        const botActions = bot.update(gameState, {
+            bots: this.bots,
+            weaponCooldownSteps: this.weaponCooldownSteps,
+            environment: {
+                width: config.mapWidth,
+                height: config.mapHeight
+            }
+        });
         return botActions;
     }
 
@@ -157,6 +182,8 @@ class Battleground {
      * performed an action so that if it stops doing anything for a while the battlefield ends.
      */
     updateBots() {
+        // Weapon cooldown is measured in environment decision ticks, not render/update frames.
+        this.weaponCooldownSteps = this.weaponCooldownSteps.map((cooldown) => advanceWeaponCooldown(cooldown));
         this.bots.forEach((bot, index) => {
             const nearestEnemy = this.getNearestEnemy(bot);
             this.botActions[index] = bot.lives > 0 && nearestEnemy
@@ -214,7 +241,6 @@ class Battleground {
         this.stepDamage = {};
         this.stepActions = this.botActions.map((action) => action ? { ...action } : null);
         this.stepCombat = this.bots.map(() => ({ canFire: false, didFire: false }));
-        this.weaponCooldownSteps = this.weaponCooldownSteps.map((cooldown) => advanceWeaponCooldown(cooldown));
 
         for (var i = 0; i < this.bots.length; i++) {
             const bot = this.bots[i];
@@ -243,55 +269,28 @@ class Battleground {
             if (bot.rotation < 0) {
                 bot.rotation += 360;
             }
+        }
 
-            bot.bullets.forEach((bullet) => {
-                const xDistance = BULLET_SPEED * Math.cos(bullet.rotation * Math.PI / 180) * delta * moveSpeedMultiplier;
-                const yDistance = BULLET_SPEED * Math.sin(bullet.rotation * Math.PI / 180) * delta * moveSpeedMultiplier;
-                bullet.xPos += xDistance;
-                bullet.yPos += yDistance;
-                if (bullet.xPos > MAX_X_POS || bullet.xPos < 0) {
-                    bullet.dead = true;
-                }
-                if (bullet.yPos > MAX_Y_POS || bullet.yPos < 0) {
-                    bullet.dead = true;
-                }
+        // Resolve collisions against the bots' final positions for this frame.
+        this.bots.forEach((bot) => this.updateBulletsForBot(bot, delta, moveSpeedMultiplier));
 
-                const hitEnemy = getAliveBots(this.bots).find((otherBot) => {
-                    return isEnemy(bot, otherBot)
-                        && distanceBetweenPoints(bullet.xPos, bullet.yPos, otherBot.xPos, otherBot.yPos) < (BULLET_RADIUS + BOT_RADIUS);
-                });
-                if (!hitEnemy) return;
-
-                hitEnemy.lives = Math.max(hitEnemy.lives - BULLET_DAMAGE, 0);
-                const actorId = this.getActorId(bot);
-                const targetId = this.getActorId(hitEnemy);
-                this.stepDamage[actorId] = {
-                    ...(this.stepDamage[actorId] || {}),
-                    dealt: (this.stepDamage[actorId]?.dealt || 0) + BULLET_DAMAGE
-                };
-                this.stepDamage[targetId] = {
-                    ...(this.stepDamage[targetId] || {}),
-                    taken: (this.stepDamage[targetId]?.taken || 0) + BULLET_DAMAGE
-                };
-                this.traceRecorder.recordEvent(this.trajectoryStep, {
-                    type: hitEnemy.lives <= 0 ? 'elimination' : 'damage',
-                    actorId,
-                    actorTeamId: bot.teamId,
-                    targetId,
-                    targetTeamId: hitEnemy.teamId,
-                    damage: BULLET_DAMAGE
-                });
-                log.debug('Bot ' + hitEnemy.id + ' hit! Now has ' + hitEnemy.lives + ' lives left.');
-                bullet.dead = true;
-            });
-
-            bot.bullets = bot.bullets.filter(function (bullet) { return !bullet.dead; });
-            log.debug('Bot bullets: ', bot.bullets);
-
+        for (var i = 0; i < this.bots.length; i++) {
+            const bot = this.bots[i];
+            const botActions = this.botActions[i];
+            if (bot.lives <= 0 || !botActions) {
+                continue;
+            }
+            const nearestEnemy = this.getNearestEnemy(bot);
+            const enemyInRange = Boolean(nearestEnemy)
+                && distanceBetweenPoints(bot.xPos, bot.yPos, nearestEnemy.xPos, nearestEnemy.yPos) <= config.neuralNetworkSquareSize * 5;
+            const systemAllowed = bot.policyMode === 'linear_intent' ? enemyInRange : true;
+            const weaponReady = (this.weaponCooldownSteps[i] || 0) <= 0;
+            const systemCanFire = bot.lives > 0 && weaponReady && systemAllowed;
             const fireResolution = resolveFireAttempt({
                 alive: bot.lives > 0,
                 attemptedFire: botActions.ds ? 1 : 0,
-                weaponCooldownSteps: this.weaponCooldownSteps[i] || 0
+                weaponCooldownSteps: this.weaponCooldownSteps[i] || 0,
+                systemAllowed
             });
 
             if (fireResolution.didFire) {
@@ -303,6 +302,9 @@ class Battleground {
 
             this.stepCombat[i] = {
                 canFire: fireResolution.canFire,
+                weaponReady,
+                enemyInRange,
+                systemCanFire,
                 didFire: fireResolution.didFire
             };
         }
@@ -310,6 +312,64 @@ class Battleground {
         this.recordTrajectoryStep();
         this.checkForWinner();
         this.emitFrame();
+    }
+
+    updateBulletsForBot(bot, delta, moveSpeedMultiplier) {
+        bot.bullets.forEach((bullet) => {
+            const previousX = bullet.xPos;
+            const previousY = bullet.yPos;
+            const xDistance = BULLET_SPEED * Math.cos(bullet.rotation * Math.PI / 180) * delta * moveSpeedMultiplier;
+            const yDistance = BULLET_SPEED * Math.sin(bullet.rotation * Math.PI / 180) * delta * moveSpeedMultiplier;
+            bullet.xPos += xDistance;
+            bullet.yPos += yDistance;
+
+            if (bullet.xPos > MAX_X_POS || bullet.xPos < 0 || bullet.yPos > MAX_Y_POS || bullet.yPos < 0) {
+                bullet.dead = true;
+                return;
+            }
+
+            const collidedBot = this.bots.find((otherBot) => {
+                return otherBot !== bot
+                    && distanceFromPointToSegment(
+                        otherBot.xPos,
+                        otherBot.yPos,
+                        previousX,
+                        previousY,
+                        bullet.xPos,
+                        bullet.yPos
+                    ) <= (BULLET_RADIUS + BOT_RADIUS);
+            });
+            if (!collidedBot) return;
+
+            // Projectiles are consumed by the first bot body they touch.
+            bullet.dead = true;
+            if (collidedBot.lives <= 0 || !isEnemy(bot, collidedBot)) return;
+
+            const hitEnemy = collidedBot;
+            hitEnemy.lives = Math.max(hitEnemy.lives - BULLET_DAMAGE, 0);
+            const actorId = this.getActorId(bot);
+            const targetId = this.getActorId(hitEnemy);
+            this.stepDamage[actorId] = {
+                ...(this.stepDamage[actorId] || {}),
+                dealt: (this.stepDamage[actorId]?.dealt || 0) + BULLET_DAMAGE
+            };
+            this.stepDamage[targetId] = {
+                ...(this.stepDamage[targetId] || {}),
+                taken: (this.stepDamage[targetId]?.taken || 0) + BULLET_DAMAGE
+            };
+            this.traceRecorder.recordEvent(this.trajectoryStep, {
+                type: hitEnemy.lives <= 0 ? 'elimination' : 'damage',
+                actorId,
+                actorTeamId: bot.teamId,
+                targetId,
+                targetTeamId: hitEnemy.teamId,
+                damage: BULLET_DAMAGE
+            });
+            log.debug('Bot ' + hitEnemy.id + ' hit! Now has ' + hitEnemy.lives + ' lives left.');
+        });
+
+        bot.bullets = bot.bullets.filter((bullet) => !bullet.dead);
+        log.debug('Bot bullets: ', bot.bullets);
     }
 
     getNearestEnemy(bot) {
@@ -346,7 +406,9 @@ class Battleground {
                 id: this.getActorId(bot),
                 teamId: bot.teamId,
                 tacticId: null,
-                policyId: bot.aiMethod ? 'heuristic' : 'neural_network',
+                policyId: bot.policyMode === 'none'
+                    ? 'none'
+                    : (bot.policyMode === 'linear_intent' ? 'linear_intent' : (bot.aiMethod ? 'heuristic' : 'neural_network')),
                 genomeId: null
             };
         });
@@ -473,6 +535,9 @@ class Battleground {
             // TODO: expose the policy's selected target to calculate aim alignment.
             aimTargetAlignment: null,
             canFire: this.stepCombat?.[botIndex]?.canFire || false,
+            weaponReady: this.stepCombat?.[botIndex]?.weaponReady || false,
+            enemyInRange: this.stepCombat?.[botIndex]?.enemyInRange || false,
+            systemCanFire: this.stepCombat?.[botIndex]?.systemCanFire || false,
             didFire: this.stepCombat?.[botIndex]?.didFire || false,
             damageDealt: this.stepDamage?.[actorId]?.dealt || 0,
             damageTaken: this.stepDamage?.[actorId]?.taken || 0
@@ -491,8 +556,8 @@ class Battleground {
                     actorId: this.getActorId(bot),
                     actorTeamId: bot.teamId,
                     state: this.getPlayerState(bot, action),
-                    action: this.getPlayerAction(bot, action),
-                    reason: createDefaultDecisionReason(),
+                    action: bot.lastTrajectoryAction || this.getPlayerAction(bot, action),
+                    reason: bot.lastDecision?.reason || createDefaultDecisionReason(),
                     measurements: this.getPlayerMeasurements(bot)
                 };
             })
@@ -518,6 +583,8 @@ class Battleground {
                     yPos: bot.yPos,
                     rotation: bot.rotation,
                     lives: bot.lives,
+                    policyMode: bot.policyMode || 'genetic',
+                    decision: bot.lastDecision ? JSON.parse(JSON.stringify(bot.lastDecision)) : null,
                     bullets: bot.bullets.map((bullet) => ({
                         id: bullet.id,
                         shooterId: bullet.shooterId,

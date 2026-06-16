@@ -1,11 +1,10 @@
 import { DecisionReason } from '../../traces/trace';
 
-export const LINEAR_INTENT_SCHEMA_VERSION = 'linear-intent-model-v0.1';
-export const LINEAR_INTENT_MODEL_URL = '/models/linear_intent_model.json';
+export const LINEAR_INTENT_SCHEMA_VERSION = 'linear-intent-model-v0.2';
+export const LINEAR_INTENT_MODEL_URL = '/models/linear-intent-model-v0.2.json';
 
 export const LINEAR_INTENT_FEATURE_NAMES = [
     'selfHpNorm',
-    'canFire',
     'allyHpNorm',
     'allyDistanceNorm',
     'enemy0HpNorm',
@@ -63,6 +62,7 @@ export interface LinearIntentEntityState {
     x: number;
     y: number;
     weaponCooldownSteps?: number;
+    missing?: boolean;
 }
 
 export interface LinearIntentFeatureInput {
@@ -97,6 +97,24 @@ export interface LinearIntentAction {
     aimX: number;
     aimY: number;
     fire: number;
+    fireWhileAiming?: boolean;
+}
+
+export interface LinearIntentRawFeatures {
+    selfHp: number;
+    maxHp: number;
+    allyHp: number;
+    allyDistance: number;
+    enemy0Hp: number;
+    enemy0Distance: number;
+    enemy1Hp: number;
+    enemy1Distance: number;
+    weaponReady: boolean;
+    enemyInRange: boolean;
+    nearestEnemyDistance: number;
+    attackRange: number;
+    arenaDiagonal: number;
+    distanceNormalizationScale: number;
 }
 
 export interface LinearIntentScenarioState extends LinearIntentFeatureInput {
