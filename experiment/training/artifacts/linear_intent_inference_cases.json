@@ -1,0 +1,30 @@
+[
+  {
+    "name": "attack_priority",
+    "features": [0.9, 1, 0.8, 0.25, 1, 0.12, 0.95, 0.5],
+    "expectedIntent": "attack_nearest_enemy",
+    "expectedScores": [3.6020000000000003, -2.2500000000000004, 1.0350000000000001, -1.5],
+    "expectedProbabilities": [0.9210442148929406, 0.00264721473160816, 0.07070441674465956, 0.005604153630791793]
+  },
+  {
+    "name": "support_priority",
+    "features": [0.7, 0, 0.15, 0.1, 1, 0.8, 0.9, 0.85],
+    "expectedIntent": "support_teammate_under_pressure",
+    "expectedScores": [-0.7249999999999999, 1.325, 0.44000000000000006, -0.5],
+    "expectedProbabilities": [0.07560781097104616, 0.5873139984874226, 0.24239281134094967, 0.09468537920058155]
+  },
+  {
+    "name": "reduce_isolation_priority",
+    "features": [0.8, 0, 0.9, 0.95, 0.9, 0.7, 0.95, 0.8],
+    "expectedIntent": "reduce_isolation",
+    "expectedScores": [-1.2399999999999998, -4.6, 3.2249999999999996, -1],
+    "expectedProbabilities": [0.011207368214421792, 0.0003892908370169734, 0.9741559836286384, 0.014247357319922825]
+  },
+  {
+    "name": "retreat_priority",
+    "features": [0.12, 0, 0.9, 0.2, 0.95, 0.2, 0.9, 0.2],
+    "expectedIntent": "retreat_when_low_hp",
+    "expectedScores": [0.9549999999999998, -2.35, 0.9000000000000001, 2.4],
+    "expectedProbabilities": [0.16064162829899492, 0.005895421146686882, 0.1520449153280628, 0.6814180352262554]
+  }
+]
