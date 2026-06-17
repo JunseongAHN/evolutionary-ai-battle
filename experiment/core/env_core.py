@@ -53,6 +53,7 @@ class PythonBattleCoreEnv:
     move_speed = 20.0
     fire_range = 260.0
     damage = 10.0
+    fire_cooldown_steps = 5
 
     def __init__(self):
         self.agent_ids: list[AgentId] = list(DEFAULT_AGENT_IDS)
@@ -121,16 +122,17 @@ class PythonBattleCoreEnv:
             "team-b-0": self._agent("team-b-0", 820.0, 430.0, -1.0, 0.0),
             "team-b-1": self._agent("team-b-1", 820.0, 570.0, -1.0, 0.0),
         }
-        self.recent_events = [
-            self._event("spawn", agent_id, team_id=self.agent_team_map[agent_id], position=self.agents[agent_id]["position"])
-            for agent_id in self.agent_ids
-        ]
         return self._observations()
 
     def step(self, actions: MultiAgentAction) -> MultiAgentStep:
-        events: list[BattleEvent] = []
+        move_events: list[tuple[AgentId, dict, dict]] = []
+        combat_events: list[BattleEvent] = []
         self.last_damage_dealt = {}
         self.last_damage_taken = {}
+
+        for agent in self.agents.values():
+            if agent["alive"] and agent["fire_cooldown"] > 0:
+                agent["fire_cooldown"] -= 1
 
         for agent_id in self.agent_ids:
             agent = self.agents[agent_id]
@@ -148,7 +150,11 @@ class PythonBattleCoreEnv:
             agent["position"]["x"] = _clamp(old_x + (move_x * self.move_speed), 0.0, self.width)
             agent["position"]["y"] = _clamp(old_y + (move_y * self.move_speed), 0.0, self.height)
             if agent["position"]["x"] != old_x or agent["position"]["y"] != old_y:
-                events.append(self._event("move", agent_id, position=deepcopy(agent["position"])))
+                move_events.append((
+                    agent_id,
+                    {"x": old_x, "y": old_y},
+                    deepcopy(agent["position"]),
+                ))
 
             aim_x = float(action.get("aim_x", 0.0))
             aim_y = float(action.get("aim_y", 0.0))
@@ -157,34 +163,19 @@ class PythonBattleCoreEnv:
                 agent["aim"] = {"x": aim_nx, "y": aim_ny}
                 agent["facing"] = {"x": aim_nx, "y": aim_ny}
 
-        for agent_id in self.agent_ids:
-            agent = self.agents[agent_id]
-            if not agent["alive"]:
-                continue
-            action = actions["actions"].get(agent_id, self._no_op_action(agent_id))["action"]
-            if float(action.get("fire", 0.0)) <= 0.5:
-                continue
-            target = self._nearest_alive_enemy(agent_id)
-            hit = target is not None and _distance(agent, target) <= self.fire_range
-            events.append(self._event(
-                "fire",
-                agent_id,
-                target_id=target["agent_id"] if target else None,
-                position=deepcopy(agent["position"]),
-                metadata={"wasteful": not hit},
-            ))
-            if not hit or target is None:
-                continue
-            damage = min(self.damage, target["hp"])
-            target["hp"] = max(0.0, target["hp"] - self.damage)
-            self.last_damage_dealt[agent_id] = self.last_damage_dealt.get(agent_id, 0.0) + damage
-            self.last_damage_taken[target["agent_id"]] = self.last_damage_taken.get(target["agent_id"], 0.0) + damage
-            events.append(self._event("damage", agent_id, target["agent_id"], value=damage, position=deepcopy(target["position"])))
-            if target["hp"] <= 0.0 and target["alive"]:
-                target["alive"] = False
-                events.append(self._event("death", agent_id, target["agent_id"], position=deepcopy(target["position"])))
-
         self.step_index += 1
+        events: list[BattleEvent] = [
+            self._event(
+                "move",
+                agent_id,
+                position=to_position,
+                metadata={"from": from_position, "to": to_position},
+            )
+            for agent_id, from_position, to_position in move_events
+        ]
+        for agent_id in self.agent_ids:
+            combat_events.extend(self._resolve_fire(agent_id, actions))
+        events.extend(combat_events)
         self.recent_events = (self.recent_events + events)[-8:]
         observations = self._observations()
         terminated = self._one_team_remaining()
@@ -213,6 +204,7 @@ class PythonBattleCoreEnv:
             "alive": True,
             "facing": {"x": aim_x, "y": aim_y},
             "aim": {"x": aim_x, "y": aim_y},
+            "fire_cooldown": 0,
         }
 
     def _event(
@@ -249,15 +241,87 @@ class PythonBattleCoreEnv:
             "episode_id": self.episode_id,
             "step": self.step_index,
             "agent_id": agent_id,
-            "action": {"move_x": 0.0, "move_y": 0.0, "aim_x": 1.0, "aim_y": 0.0, "fire": 0.0},
+            "action": {"move_x": 0.0, "move_y": 0.0, "aim_x": 0.0, "aim_y": 0.0, "fire": 0.0},
             "source": {"policy_type": "random", "policy_id": "no-op"},
         }
 
-    def _nearest_alive_enemy(self, agent_id: AgentId) -> dict | None:
+    def _resolve_fire(self, agent_id: AgentId, actions: MultiAgentAction) -> list[BattleEvent]:
+        agent = self.agents[agent_id]
+        if not agent["alive"]:
+            return []
+
+        action = actions["actions"].get(agent_id, self._no_op_action(agent_id))["action"]
+        if float(action.get("fire", 0.0)) <= 0.5:
+            return []
+
+        if agent["fire_cooldown"] > 0:
+            return [
+                self._event(
+                    "fire",
+                    agent_id,
+                    position=deepcopy(agent["position"]),
+                    metadata={
+                        "hit": False,
+                        "target_id": None,
+                        "cooldown_blocked": True,
+                        "wasteful": True,
+                    },
+                )
+            ]
+
+        agent["fire_cooldown"] = self.fire_cooldown_steps
+        target = self._nearest_alive_enemy_in_range(agent_id)
+        hit = target is not None
+        events = [
+            self._event(
+                "fire",
+                agent_id,
+                target_id=target["agent_id"] if target else None,
+                position=deepcopy(agent["position"]),
+                metadata={
+                    "hit": hit,
+                    "target_id": target["agent_id"] if target else None,
+                    "cooldown_blocked": False,
+                    "wasteful": not hit,
+                },
+            )
+        ]
+        if target is None:
+            return events
+
+        damage = min(self.damage, target["hp"])
+        target["hp"] = max(0.0, target["hp"] - self.damage)
+        self.last_damage_dealt[agent_id] = self.last_damage_dealt.get(agent_id, 0.0) + damage
+        self.last_damage_taken[target["agent_id"]] = self.last_damage_taken.get(target["agent_id"], 0.0) + damage
+        events.append(
+            self._event(
+                "damage",
+                agent_id,
+                target_id=target["agent_id"],
+                value=damage,
+                position=deepcopy(target["position"]),
+            )
+        )
+        if target["hp"] <= 0.0 and target["alive"]:
+            target["alive"] = False
+            events.append(
+                self._event(
+                    "death",
+                    agent_id,
+                    target_id=target["agent_id"],
+                    team_id=target["team_id"],
+                    position=deepcopy(target["position"]),
+                )
+            )
+        return events
+
+    def _nearest_alive_enemy_in_range(self, agent_id: AgentId) -> dict | None:
         agent = self.agents[agent_id]
         enemies = [
             candidate for candidate in self.agents.values()
-            if candidate["alive"] and candidate["team_id"] != agent["team_id"]
+            if candidate["alive"]
+            and candidate["team_id"] != agent["team_id"]
+            and _distance(agent, candidate) <= self.fire_range
         ]
         if not enemies:
             return None
@@ -330,13 +394,13 @@ class PythonBattleCoreEnv:
             "vector": vector,
             "vector_keys": list(DEFAULT_VECTOR_KEYS),
             "visible_enemies": enemies,
-            "visible_enemies_mask": [True] * len(enemies),
+            "visible_enemies_mask": self._mask(len(enemies), 3),
             "visible_allies": allies,
-            "visible_allies_mask": [True] * len(allies),
+            "visible_allies_mask": self._mask(len(allies), 1),
             "visible_obstacles": [],
             "visible_obstacles_mask": [],
             "recent_events": recent_events,
-            "recent_events_mask": [True] * len(recent_events),
+            "recent_events_mask": self._mask(len(recent_events), 8),
         }
 
     def _snapshot(self, events: list[BattleEvent]) -> BattleSnapshot:
@@ -353,7 +417,9 @@ class PythonBattleCoreEnv:
             "events": events,
         }
 
+    def _mask(self, item_count: int, max_count: int) -> list[bool]:
+        return [index < item_count for index in range(max_count)]
+
     def _one_team_remaining(self) -> bool:
         alive_teams = {agent["team_id"] for agent in self.agents.values() if agent["alive"]}
         return len(alive_teams) <= 1
-
