@@ -9,6 +9,7 @@ import { distanceBetweenPoints } from '../../shared/math';
 import config from '../../../config/default.json';
 import log from '../../shared/logger';
 import { getAliveBots, getAliveTeamIds, isEnemy } from './teams';
+import { DEFAULT_BATTLE_CONFIG, resolveBattleConfig } from './battleSetup';
 import TraceRecorder from '../traces/traceRecorder';
 import { createDefaultDecisionReason } from '../traces/trace';
 import {
@@ -51,7 +52,8 @@ function distanceFromPointToSegment(pointX, pointY, startX, startY, endX, endY) 
 }
 
 class Battleground {
-    constructor() {
+    constructor(battleConfig = DEFAULT_BATTLE_CONFIG) {
+        this.battleConfig = resolveBattleConfig(battleConfig);
         this.bots = [];
         this.botActions = [];
         this.bullets = [];
@@ -75,6 +77,11 @@ class Battleground {
      */
     addBots(...bots) {
         this.bots.push(...bots);
+        this.bots.forEach((bot) => {
+            if (!bot.actorId) {
+                bot.actorId = this.getActorId(bot);
+            }
+        });
         this.weaponCooldownSteps = this.bots.map(() => 0);
     }
 
@@ -133,14 +140,14 @@ class Battleground {
                 teamId: bot.teamId,
                 lives: bot.lives
             })),
-            bot1: {
+            bot1: this.bots[0] ? {
                 lives: this.bots[0].lives,
                 teamId: this.bots[0].teamId
-            },
-            bot2: {
-                lives: this.bots[2].lives,
-                teamId: this.bots[2].teamId
-            }
+            } : null,
+            bot2: this.bots.find((bot) => bot.teamId !== this.bots[0]?.teamId) ? {
+                lives: this.bots.find((bot) => bot.teamId !== this.bots[0]?.teamId).lives,
+                teamId: this.bots.find((bot) => bot.teamId !== this.bots[0]?.teamId).teamId
+            } : null
         };
         this.onEnd(results);
         this.onEnd = null;
@@ -311,6 +318,10 @@ class Battleground {
 
         this.recordTrajectoryStep();
         this.checkForWinner();
+        if (this.battleConfig.maxSteps && this.trajectoryStep >= this.battleConfig.maxSteps) {
+            this.endReason = 'max_steps';
+            this.end();
+        }
         this.emitFrame();
     }
 
@@ -408,7 +419,11 @@ class Battleground {
                 tacticId: null,
                 policyId: bot.policyMode === 'none'
                     ? 'none'
-                    : (bot.policyMode === 'linear_intent' ? 'linear_intent' : (bot.aiMethod ? 'heuristic' : 'neural_network')),
+                    : (bot.policyMode === 'random'
+                        ? 'random'
+                        : (bot.policyMode === 'user_controlled'
+                            ? 'user_controlled'
+                            : (bot.policyMode === 'linear_intent' ? 'linear_intent' : (bot.aiMethod ? 'heuristic' : 'neural_network')))),
                 genomeId: null
             };
         });
@@ -416,15 +431,19 @@ class Battleground {
         return {
             trajectoryId: `battle-${Date.now()}`,
             schemaVersion: '0.1.0',
-            scenarioId: '2v2_default',
+            scenarioId: `${this.battleConfig.mode}_${this.battleConfig.teamCount}x${this.battleConfig.playersPerTeam}`,
             seed: null,
             createdAt: new Date().toISOString(),
+            battleConfig: this.battleConfig,
             teams,
             players
         };
     }
 
     getActorId(bot) {
+        if (bot.actorId) {
+            return bot.actorId;
+        }
         const teamIndex = this.bots.filter((candidate) => candidate.teamId === bot.teamId).indexOf(bot);
         return `${bot.teamId}-${teamIndex}`;
     }

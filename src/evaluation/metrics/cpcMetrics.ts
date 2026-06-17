@@ -3,10 +3,13 @@ import { PlayerStepRecord, Trajectory, TrajectoryStep } from '../../engine/trace
 export interface CpcMetric {
     playerId: string;
     teamId: string;
+    applicable: boolean;
     teammateUnderPressureEvents: number;
     teammateUnderPressureResponses: number;
     teammateResponseRate: number;
+    isolatedSteps: number;
     isolationRate: number;
+    avgAllyDistance: number | null;
 }
 
 export interface CpcMetricMap {
@@ -109,14 +112,35 @@ function getAliveTeammates(step: TrajectoryStep, actorRecord: PlayerStepRecord):
     return (step.players || []).filter((player) => player && player.actorTeamId === actorRecord.actorTeamId && player.actorId !== actorRecord.actorId && isAlive(player));
 }
 
+function hasTeammateInMetadata(trajectory: Trajectory | null | undefined, playerId: string, teamId?: string | null): boolean {
+    if (!trajectory || !Array.isArray(trajectory.teams)) {
+        return true;
+    }
+
+    const team = trajectory.teams.find((candidate) => {
+        if (!candidate || !Array.isArray(candidate.playerIds)) {
+            return false;
+        }
+        if (teamId && candidate.teamId !== teamId) {
+            return false;
+        }
+        return candidate.playerIds.includes(playerId);
+    });
+
+    return team ? team.playerIds.length > 1 : true;
+}
+
 export function getEmptyCpcMetric(player: { playerId: string; teamId?: string | null } | null | undefined): CpcMetric {
     return {
         playerId: player && typeof player.playerId === 'string' ? player.playerId : '',
         teamId: player && typeof player.teamId === 'string' && player.teamId.length > 0 ? player.teamId : 'unknown',
+        applicable: true,
         teammateUnderPressureEvents: 0,
         teammateUnderPressureResponses: 0,
         teammateResponseRate: 0,
-        isolationRate: 0
+        isolatedSteps: 0,
+        isolationRate: 0,
+        avgAllyDistance: null
     };
 }
 
@@ -156,6 +180,8 @@ export function computeCpcMetrics(trajectory: Trajectory | null | undefined, opt
     const fireThreshold = options.fireThreshold ?? 0;
     const validAliveStepsByPlayer: Record<string, number> = {};
     const isolatedStepsByPlayer: Record<string, number> = {};
+    const allyDistanceSumByPlayer: Record<string, number> = {};
+    const allyDistanceCountByPlayer: Record<string, number> = {};
 
     if (Array.isArray(trajectory.players)) {
         trajectory.players.forEach((player) => {
@@ -167,6 +193,7 @@ export function computeCpcMetrics(trajectory: Trajectory | null | undefined, opt
                 return;
             }
             ensureCpcMetric(metrics, playerId, getStringValue(player.teamId));
+            metrics[playerId].applicable = hasTeammateInMetadata(trajectory, playerId, getStringValue(player.teamId));
         });
     }
 
@@ -182,6 +209,10 @@ export function computeCpcMetrics(trajectory: Trajectory | null | undefined, opt
             const actorMetric = ensureCpcMetric(metrics, actorId, actorRecord.actorTeamId);
 
             if (!isAlive(actorRecord)) {
+                return;
+            }
+
+            if (!actorMetric.applicable) {
                 return;
             }
 
@@ -202,6 +233,8 @@ export function computeCpcMetrics(trajectory: Trajectory | null | undefined, opt
             }
             if (computedAllyDistance !== null) {
                 validAliveStepsByPlayer[actorId] = (validAliveStepsByPlayer[actorId] || 0) + 1;
+                allyDistanceSumByPlayer[actorId] = (allyDistanceSumByPlayer[actorId] || 0) + computedAllyDistance;
+                allyDistanceCountByPlayer[actorId] = (allyDistanceCountByPlayer[actorId] || 0) + 1;
             }
 
             const pressureTeammate = getAliveTeammates(step, actorRecord).find((teammate) => {
@@ -252,10 +285,24 @@ export function computeCpcMetrics(trajectory: Trajectory | null | undefined, opt
     });
 
     Object.values(metrics).forEach((metric) => {
+        if (!metric.applicable) {
+            metric.teammateUnderPressureEvents = 0;
+            metric.teammateUnderPressureResponses = 0;
+            metric.teammateResponseRate = 0;
+            metric.isolatedSteps = 0;
+            metric.isolationRate = 0;
+            metric.avgAllyDistance = null;
+            return;
+        }
         const validAliveSteps = validAliveStepsByPlayer[metric.playerId] || 0;
+        metric.isolatedSteps = isolatedStepsByPlayer[metric.playerId] || 0;
         metric.isolationRate = validAliveSteps > 0
-            ? Number(((isolatedStepsByPlayer[metric.playerId] || 0) / validAliveSteps).toFixed(2))
+            ? Number((metric.isolatedSteps / validAliveSteps).toFixed(2))
             : 0;
+        const allyDistanceCount = allyDistanceCountByPlayer[metric.playerId] || 0;
+        metric.avgAllyDistance = allyDistanceCount > 0
+            ? Number(((allyDistanceSumByPlayer[metric.playerId] || 0) / allyDistanceCount).toFixed(2))
+            : null;
         metric.teammateResponseRate = metric.teammateUnderPressureEvents > 0
             ? Number((metric.teammateUnderPressureResponses / metric.teammateUnderPressureEvents).toFixed(2))
             : 0;

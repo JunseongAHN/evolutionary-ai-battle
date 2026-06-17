@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "linear-intent-model-v0.1",
+  "modelType": "softmax_linear_classifier",
+  "input": {
+    "featureNames": [
+      "selfHpNorm",
+      "canFire",
+      "allyHpNorm",
+      "allyDistanceNorm",
+      "enemy0HpNorm",
+      "enemy0DistanceNorm",
+      "enemy1HpNorm",
+      "enemy1DistanceNorm"
+    ],
+    "featureCount": 8,
+    "featureOrderLocked": true
+  },
+  "output": {
+    "labels": [
+      "attack_nearest_enemy",
+      "support_teammate_under_pressure",
+      "reduce_isolation",
+      "retreat_when_low_hp"
+    ],
+    "labelToIndex": {
+      "attack_nearest_enemy": 0,
+      "support_teammate_under_pressure": 1,
+      "reduce_isolation": 2,
+      "retreat_when_low_hp": 3
+    },
+    "indexToLabel": {
+      "0": "attack_nearest_enemy",
+      "1": "support_teammate_under_pressure",
+      "2": "reduce_isolation",
+      "3": "retreat_when_low_hp"
+    }
+  },
+  "weights": [
+    [0.5, 2.5, 0, -0.9, 1.1, -1.9, 0.9, -1.5],
+    [0, -0.2, -4.5, -3, 0, 0, 0, 0],
+    [0, 0, 0.2, 3.1, 0, 0, 0, 0],
+    [-5, 0, 0, 0, 0, 0, 0, 0]
+  ],
+  "bias": [-0.1, 2.3, 0.1, 3],
+  "training": {
+    "trainDataset": "experiment/training/data/intent_dataset/train_intent_dataset.json",
+    "evalDataset": "experiment/training/data/intent_dataset/eval_intent_dataset.json",
+    "epochs": 12,
+    "learningRate": 0.05,
+    "l2": 0.001,
+    "seed": 42,
+    "trainSize": 32,
+    "evalSize": 8,
+    "trainAccuracy": 0.94,
+    "evalAccuracy": 0.88
+  }
+}
