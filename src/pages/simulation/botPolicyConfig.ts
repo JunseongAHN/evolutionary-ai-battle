@@ -1,12 +1,14 @@
 export const BOT_POLICY_TYPES = {
     genome: 'genome',
     linearIntent: 'linear_intent',
+    random: 'random',
+    userControlled: 'user_controlled',
     none: 'none'
 } as const;
 
 export type BotPolicyType = typeof BOT_POLICY_TYPES[keyof typeof BOT_POLICY_TYPES];
 
-export type BotPolicyConfig = Record<1 | 2 | 3 | 4, BotPolicyType>;
+export type BotPolicyConfig = Record<number, BotPolicyType>;
 
 export function createDefaultBotPolicyConfig(): BotPolicyConfig {
     return {
@@ -18,15 +20,10 @@ export function createDefaultBotPolicyConfig(): BotPolicyConfig {
 }
 
 export function cloneBotPolicyConfig(config: BotPolicyConfig): BotPolicyConfig {
-    return {
-        1: config[1],
-        2: config[2],
-        3: config[3],
-        4: config[4]
-    };
+    return { ...config };
 }
 
-export function setBotPolicy(config: BotPolicyConfig, botId: 1 | 2 | 3 | 4, policy: BotPolicyType): BotPolicyConfig {
+export function setBotPolicy(config: BotPolicyConfig, botId: number, policy: BotPolicyType): BotPolicyConfig {
     return {
         ...config,
         [botId]: policy
@@ -34,12 +31,10 @@ export function setBotPolicy(config: BotPolicyConfig, botId: 1 | 2 | 3 | 4, poli
 }
 
 export function setAllBotPolicies(policy: BotPolicyType): BotPolicyConfig {
-    return {
-        1: policy,
-        2: policy,
-        3: policy,
-        4: policy
-    };
+    return Object.keys(createDefaultBotPolicyConfig()).reduce((nextConfig, botId) => ({
+        ...nextConfig,
+        [Number(botId)]: policy
+    }), {});
 }
 
 export function setTeamAPolicy(policy: BotPolicyType): BotPolicyConfig {
@@ -66,6 +61,8 @@ export function requiresLinearIntentModel(config: BotPolicyConfig): boolean {
 
 export function formatBotPolicy(policy: BotPolicyType): string {
     if (policy === BOT_POLICY_TYPES.linearIntent) return 'Linear Intent';
+    if (policy === BOT_POLICY_TYPES.random) return 'Random';
+    if (policy === BOT_POLICY_TYPES.userControlled) return 'User Controlled';
     if (policy === BOT_POLICY_TYPES.none) return 'None';
     return 'Genome';
 }

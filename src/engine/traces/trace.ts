@@ -19,6 +19,12 @@ export interface TrajectoryMetadata {
     scenarioId: string;
     seed: number | null;
     createdAt?: string;
+    battleConfig?: {
+        mode: 'solo' | 'duo';
+        teamCount: number;
+        playersPerTeam: 1 | 2;
+        maxSteps?: number;
+    };
     teams: TeamDescriptor[];
     players: PlayerDescriptor[];
 }
@@ -155,6 +161,12 @@ export interface Trajectory {
     scenarioId: string;
     seed: number | null;
     createdAt: string;
+    battleConfig?: {
+        mode: 'solo' | 'duo';
+        teamCount: number;
+        playersPerTeam: 1 | 2;
+        maxSteps?: number;
+    };
     teams: TeamDescriptor[];
     players: PlayerDescriptor[];
     initialState?: InitialState | null;
@@ -195,6 +207,7 @@ export function createEmptyTrajectory(metadata: TrajectoryMetadata): Trajectory 
         scenarioId: metadata.scenarioId,
         seed: metadata.seed,
         createdAt: metadata.createdAt || new Date().toISOString(),
+        battleConfig: metadata.battleConfig,
         teams: metadata.teams,
         players: metadata.players,
         initialState: null,

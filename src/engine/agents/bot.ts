@@ -33,7 +33,8 @@ class Bot {
     constructor(id, teamId) {
         this.id = id;
         this.teamId = teamId;
-        const poseNum = this.teamId === 'team-a' ? 0 : 1;
+        const numericTeamMatch = String(this.teamId).match(/^team-(\d+)$/);
+        const poseNum = numericTeamMatch ? Number(numericTeamMatch[1]) % config.botStartPoses.length : (this.teamId === 'team-a' ? 0 : 1);
         const pose = config.botStartPoses[poseNum];
         const spawnVariant = (this.id - 1) % 2;
         const yHalf = pose.yPos.min + ((pose.yPos.max - pose.yPos.min) / 2);
@@ -64,6 +65,10 @@ class Bot {
 
     setLinearIntentModel(model) {
         this.linearIntentModel = model;
+    }
+
+    setUserAction(action) {
+        this.userAction = action;
     }
     
     /**
@@ -294,6 +299,17 @@ class Bot {
         this.lastTrajectoryAction = null;
         if (this.policyMode === 'none') {
             return {
+                dx: 0,
+                dy: 0,
+                dh: 0,
+                ds: false
+            };
+        }
+        if (this.policyMode === 'random') {
+            return this.createRandomOutputObject();
+        }
+        if (this.policyMode === 'user_controlled') {
+            return this.userAction || {
                 dx: 0,
                 dy: 0,
                 dh: 0,

@@ -9,6 +9,10 @@ function formatRate(value) {
     return typeof value === 'number' ? `${Math.round(value * 100)}%` : '0%';
 }
 
+function formatCpc(row, key, formatter = formatNumber) {
+    return row.cpc?.applicable ? formatter(row.cpc[key]) : 'N/A';
+}
+
 function getPlayerRows(evaluation) {
     if (!evaluation?.players) {
         return [];
@@ -57,10 +61,10 @@ function PlayerTable({ title, evaluation }) {
                                     <td>{formatNumber(row.player.damageDealt)}</td>
                                     <td>{formatNumber(row.player.damageTaken)}</td>
                                     <td>{formatNumber(row.player.survivalSteps)}</td>
-                                    <td>{formatNumber(row.cpc.teammateUnderPressureEvents)}</td>
-                                    <td>{formatNumber(row.cpc.teammateUnderPressureResponses)}</td>
-                                    <td>{formatRate(row.cpc.teammateResponseRate)}</td>
-                                    <td>{formatRate(row.cpc.isolationRate)}</td>
+                                    <td>{formatCpc(row, 'teammateUnderPressureEvents')}</td>
+                                    <td>{formatCpc(row, 'teammateUnderPressureResponses')}</td>
+                                    <td>{formatCpc(row, 'teammateResponseRate', formatRate)}</td>
+                                    <td>{formatCpc(row, 'isolationRate', formatRate)}</td>
                                     <td>{formatNumber(row.evaluationScore)}</td>
                                 </tr>
                             ))}

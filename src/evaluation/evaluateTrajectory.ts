@@ -12,10 +12,13 @@ export interface EvaluationPlayerSummary {
         survivalSteps: number;
     };
     cpc: {
+        applicable: boolean;
         teammateUnderPressureEvents: number;
         teammateUnderPressureResponses: number;
         teammateResponseRate: number;
+        isolatedSteps: number;
         isolationRate: number;
+        avgAllyDistance: number | null;
     };
     evaluationScore: number;
 }
@@ -46,8 +49,8 @@ function getEvaluationScore(player: EvaluationPlayerSummary['player'], cpc: Eval
         player.damageDealt
         - (0.5 * player.damageTaken)
         - (0.1 * player.survivalSteps)
-        - (100 * cpc.teammateResponseRate)
-        + (50 * cpc.isolationRate)
+        - (100 * (cpc.applicable ? cpc.teammateResponseRate : 0))
+        + (50 * (cpc.applicable ? cpc.isolationRate : 0))
     ).toFixed(2));
 }
 
@@ -60,7 +63,7 @@ export function evaluateTrajectory(trajectory: Trajectory | null | undefined, op
     const playerMetrics: PlayerMetricMap = computePlayerMetrics(trajectory);
     const cpcMetrics: CpcMetricMap = computeCpcMetrics(trajectory, options);
     const players: Record<string, EvaluationPlayerSummary> = {};
-    const teams: Record<string, EvaluationTeamSummary & { _responseRateSum: number; _isolationRateSum: number; _scoreSum: number; _playerCount: number }> = {};
+    const teams: Record<string, EvaluationTeamSummary & { _responseRateSum: number; _isolationRateSum: number; _scoreSum: number; _playerCount: number; _cpcPlayerCount: number }> = {};
 
     Object.keys(playerMetrics).forEach((playerId) => {
         const playerMetric = playerMetrics[playerId];
@@ -76,10 +79,13 @@ export function evaluateTrajectory(trajectory: Trajectory | null | undefined, op
         };
 
         const cpc = {
+            applicable: cpcMetric.applicable,
             teammateUnderPressureEvents: cpcMetric.teammateUnderPressureEvents,
             teammateUnderPressureResponses: cpcMetric.teammateUnderPressureResponses,
             teammateResponseRate: cpcMetric.teammateResponseRate,
-            isolationRate: cpcMetric.isolationRate
+            isolatedSteps: cpcMetric.isolatedSteps,
+            isolationRate: cpcMetric.isolationRate,
+            avgAllyDistance: cpcMetric.avgAllyDistance
         };
 
         const evaluationScore = getEvaluationScore(player, cpc);
@@ -106,7 +112,8 @@ export function evaluateTrajectory(trajectory: Trajectory | null | undefined, op
                 _responseRateSum: 0,
                 _isolationRateSum: 0,
                 _scoreSum: 0,
-                _playerCount: 0
+                _playerCount: 0,
+                _cpcPlayerCount: 0
             };
         }
 
@@ -115,20 +122,24 @@ export function evaluateTrajectory(trajectory: Trajectory | null | undefined, op
         team.damageDealt += player.damageDealt;
         team.damageTaken += player.damageTaken;
         team.survivalSteps += player.survivalSteps;
-        team._responseRateSum += cpc.teammateResponseRate;
-        team._isolationRateSum += cpc.isolationRate;
+        if (cpc.applicable) {
+            team._responseRateSum += cpc.teammateResponseRate;
+            team._isolationRateSum += cpc.isolationRate;
+            team._cpcPlayerCount += 1;
+        }
         team._scoreSum += evaluationScore;
         team._playerCount += 1;
     });
 
     Object.values(teams).forEach((team) => {
-        team.avgTeammateResponseRate = team._playerCount > 0 ? Number((team._responseRateSum / team._playerCount).toFixed(2)) : 0;
-        team.avgIsolationRate = team._playerCount > 0 ? Number((team._isolationRateSum / team._playerCount).toFixed(2)) : 0;
+        team.avgTeammateResponseRate = team._cpcPlayerCount > 0 ? Number((team._responseRateSum / team._cpcPlayerCount).toFixed(2)) : 0;
+        team.avgIsolationRate = team._cpcPlayerCount > 0 ? Number((team._isolationRateSum / team._cpcPlayerCount).toFixed(2)) : 0;
         team.avgEvaluationScore = team._playerCount > 0 ? Number((team._scoreSum / team._playerCount).toFixed(2)) : 0;
         delete team._responseRateSum;
         delete team._isolationRateSum;
         delete team._scoreSum;
         delete team._playerCount;
+        delete team._cpcPlayerCount;
     });
 
     return {

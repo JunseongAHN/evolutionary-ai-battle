@@ -3,8 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Bot from '../../engine/agents/bot';
 import Genome from '../../engine/evolution/genome';
 import Battleground from '../../engine/simulation/battleground';
+import { DEFAULT_BATTLE_CONFIG, createBattleTeams, resolveBattleConfig } from '../../engine/simulation/battleSetup';
 import Trainer from '../../engine/training/trainer';
 import { evaluateTrajectory } from '../../evaluation/evaluateTrajectory';
+import { createBaselineRunResult, groupBaselineRowsBySeed, summarizeBaselineRows } from '../../evaluation/baselineComparison';
 import {
     createReplayStateFromStep,
     getPlayerFrame,
@@ -19,31 +21,48 @@ import {
     createDefaultBotPolicyConfig,
     formatBotPolicy,
     requiresLinearIntentModel,
-    setAllBotPolicies,
-    setBotPolicy,
-    setTeamAPolicy,
-    setTeamBPolicy
+    setBotPolicy
 } from './botPolicyConfig';
 
-const BOT_IDS = [1, 2, 3, 4];
+const DEFAULT_SETUP = createBattleTeams(DEFAULT_BATTLE_CONFIG);
+function getCanvasIds(prefix, battleConfig = DEFAULT_BATTLE_CONFIG) {
+    const setup = createBattleTeams(battleConfig);
+    const canvasByActorId = setup.players.reduce((mapping, player) => ({
+        ...mapping,
+        [player.id]: `${prefix}-bot${player.numericId}brain`
+    }), {
+        'team-a-0': `${prefix}-bot1brain`,
+        'team-a-1': `${prefix}-bot2brain`,
+        'team-b-0': `${prefix}-bot3brain`,
+        'team-b-1': `${prefix}-bot4brain`
+    });
 
-function getCanvasIds(prefix) {
     return {
         battle: `${prefix}-battleground`,
-        bot: (botId) => {
-            const canvasByActorId = {
-                'team-a-0': `${prefix}-bot1brain`,
-                'team-a-1': `${prefix}-bot2brain`,
-                'team-b-0': `${prefix}-bot3brain`,
-                'team-b-1': `${prefix}-bot4brain`
-            };
-            return canvasByActorId[String(botId)] || `${prefix}-bot${botId}brain`;
-        }
+        bot: (botId) => canvasByActorId[String(botId)] || `${prefix}-bot${botId}brain`
     };
 }
 
 export function actorIdForBot(botId) {
-    return botId <= 2 ? `team-a-${botId - 1}` : `team-b-${botId - 3}`;
+    const defaultPlayer = DEFAULT_SETUP.players.find((player) => player.numericId === botId);
+    return defaultPlayer ? defaultPlayer.id : `bot-${botId}`;
+}
+
+function createBotFromDescriptor(descriptor, genome, totalGenerations, policyConfig, linearIntentModel, useOpponentAi = false) {
+    const bot = new Bot(descriptor.numericId, descriptor.teamId);
+    bot.actorId = descriptor.id;
+    bot.loadGenome(genome);
+    if (useOpponentAi) {
+        bot.selectAIMethod(totalGenerations);
+    }
+
+    const policy = policyConfig[bot.id] || BOT_POLICY_TYPES.genome;
+    bot.setPolicyMode(policy);
+    if (policy === BOT_POLICY_TYPES.linearIntent) {
+        bot.setLinearIntentModel(linearIntentModel);
+    }
+
+    return bot;
 }
 
 function sortAndFormatSpecies(speciesData) {
@@ -64,6 +83,8 @@ function createEmptySessionTotals(playerId, teamId) {
         totalDamageDealt: 0,
         totalDamageTaken: 0,
         totalSurvivalSteps: 0,
+        cpcApplicable: false,
+        cpcBattleCount: 0,
         totalTeammateUnderPressureEvents: 0,
         totalTeammateUnderPressureResponses: 0,
         totalResponseRateSum: 0,
@@ -90,10 +111,14 @@ function mergeSessionTotals(previousTotals, evaluation) {
         current.totalDamageDealt += summary.player.damageDealt || 0;
         current.totalDamageTaken += summary.player.damageTaken || 0;
         current.totalSurvivalSteps += summary.player.survivalSteps || 0;
-        current.totalTeammateUnderPressureEvents += summary.cpc.teammateUnderPressureEvents || 0;
-        current.totalTeammateUnderPressureResponses += summary.cpc.teammateUnderPressureResponses || 0;
-        current.totalResponseRateSum += summary.cpc.teammateResponseRate || 0;
-        current.totalIsolationRateSum += summary.cpc.isolationRate || 0;
+        if (summary.cpc?.applicable) {
+            current.cpcApplicable = true;
+            current.cpcBattleCount += 1;
+            current.totalTeammateUnderPressureEvents += summary.cpc.teammateUnderPressureEvents || 0;
+            current.totalTeammateUnderPressureResponses += summary.cpc.teammateUnderPressureResponses || 0;
+            current.totalResponseRateSum += summary.cpc.teammateResponseRate || 0;
+            current.totalIsolationRateSum += summary.cpc.isolationRate || 0;
+        }
         current.totalEvaluationScoreSum += summary.evaluationScore || 0;
 
         nextTotals[playerId] = current;
@@ -114,11 +139,15 @@ function summarizeSessionTotals(sessionTotals) {
             survivalSteps: totals.totalSurvivalSteps,
         };
 
+        const cpcBattleCount = totals.cpcBattleCount || 0;
         const cpc = {
+            applicable: Boolean(totals.cpcApplicable),
             teammateUnderPressureEvents: totals.totalTeammateUnderPressureEvents,
             teammateUnderPressureResponses: totals.totalTeammateUnderPressureResponses,
-            teammateResponseRate: battleCount > 0 ? Number((totals.totalResponseRateSum / battleCount).toFixed(2)) : 0,
-            isolationRate: battleCount > 0 ? Number((totals.totalIsolationRateSum / battleCount).toFixed(2)) : 0
+            teammateResponseRate: cpcBattleCount > 0 ? Number((totals.totalResponseRateSum / cpcBattleCount).toFixed(2)) : 0,
+            isolatedSteps: 0,
+            isolationRate: cpcBattleCount > 0 ? Number((totals.totalIsolationRateSum / cpcBattleCount).toFixed(2)) : 0,
+            avgAllyDistance: null
         };
 
         players[totals.playerId] = {
@@ -140,6 +169,7 @@ function summarizeSessionTotals(sessionTotals) {
                 avgIsolationRate: 0,
                 avgEvaluationScore: 0,
                 _playerCount: 0,
+                _cpcPlayerCount: 0,
                 _responseRateSum: 0,
                 _isolationRateSum: 0,
                 _evaluationScoreSum: 0
@@ -151,17 +181,21 @@ function summarizeSessionTotals(sessionTotals) {
         team.damageDealt += totals.totalDamageDealt;
         team.damageTaken += totals.totalDamageTaken;
         team.survivalSteps += totals.totalSurvivalSteps;
-        team._responseRateSum += cpc.teammateResponseRate;
-        team._isolationRateSum += cpc.isolationRate;
+        if (cpc.applicable) {
+            team._responseRateSum += cpc.teammateResponseRate;
+            team._isolationRateSum += cpc.isolationRate;
+            team._cpcPlayerCount += 1;
+        }
         team._evaluationScoreSum += players[totals.playerId].evaluationScore;
         team._playerCount += 1;
     });
 
     Object.values(teams).forEach((team) => {
-        team.avgTeammateResponseRate = team._playerCount > 0 ? Number((team._responseRateSum / team._playerCount).toFixed(2)) : 0;
-        team.avgIsolationRate = team._playerCount > 0 ? Number((team._isolationRateSum / team._playerCount).toFixed(2)) : 0;
+        team.avgTeammateResponseRate = team._cpcPlayerCount > 0 ? Number((team._responseRateSum / team._cpcPlayerCount).toFixed(2)) : 0;
+        team.avgIsolationRate = team._cpcPlayerCount > 0 ? Number((team._isolationRateSum / team._cpcPlayerCount).toFixed(2)) : 0;
         team.avgEvaluationScore = team._playerCount > 0 ? Number((team._evaluationScoreSum / team._playerCount).toFixed(2)) : 0;
         delete team._playerCount;
+        delete team._cpcPlayerCount;
         delete team._responseRateSum;
         delete team._isolationRateSum;
         delete team._evaluationScoreSum;
@@ -183,6 +217,8 @@ export function useSimulation() {
     const replayTimerRef = useRef(null);
     const selectedSpeciesRef = useRef(null);
     const isBattleRunningRef = useRef(false);
+    const baselineControlledBotRef = useRef(null);
+    const pressedKeysRef = useRef(new Set());
 
     const [loading, setLoading] = useState(true);
     const [species, setSpecies] = useState([]);
@@ -202,10 +238,13 @@ export function useSimulation() {
     const [autoRunBattles, setAutoRunBattles] = useState(false);
     const [mode, setMode] = useState('live');
     const [botPolicyConfig, setBotPolicyConfig] = useState(createDefaultBotPolicyConfig());
+    const [battleConfig, setBattleConfig] = useState(DEFAULT_BATTLE_CONFIG);
     const [linearIntentModel, setLinearIntentModel] = useState(null);
     const [linearModelLoadStatus, setLinearModelLoadStatus] = useState('Linear model not loaded');
     const [linearModelError, setLinearModelError] = useState('');
     const [linearModelLoading, setLinearModelLoading] = useState(false);
+    const [baselineSeed, setBaselineSeed] = useState(1);
+    const [baselineResults, setBaselineResults] = useState([]);
 
     const stopReplayPlayback = useCallback(() => {
         if (replayTimerRef.current) {
@@ -249,24 +288,19 @@ export function useSimulation() {
     }, []);
 
     const setAllGenomePolicies = useCallback(() => {
-        setBotPolicyConfig(setAllBotPolicies(BOT_POLICY_TYPES.genome));
-    }, []);
+        const botIds = createBattleTeams(battleConfig).players.map((player) => player.numericId);
+        setBotPolicyConfig(botIds.reduce((config, botId) => ({ ...config, [botId]: BOT_POLICY_TYPES.genome }), {}));
+    }, [battleConfig]);
 
     const setAllLinearPolicies = useCallback(() => {
-        setBotPolicyConfig(setAllBotPolicies(BOT_POLICY_TYPES.linearIntent));
-    }, []);
+        const botIds = createBattleTeams(battleConfig).players.map((player) => player.numericId);
+        setBotPolicyConfig(botIds.reduce((config, botId) => ({ ...config, [botId]: BOT_POLICY_TYPES.linearIntent }), {}));
+    }, [battleConfig]);
 
     const setAllNonePolicies = useCallback(() => {
-        setBotPolicyConfig(setAllBotPolicies(BOT_POLICY_TYPES.none));
-    }, []);
-
-    const setTeamALinearVsTeamBGenome = useCallback(() => {
-        setBotPolicyConfig(setTeamAPolicy(BOT_POLICY_TYPES.linearIntent));
-    }, []);
-
-    const setTeamAGenomeVsTeamBLinear = useCallback(() => {
-        setBotPolicyConfig(setTeamBPolicy(BOT_POLICY_TYPES.linearIntent));
-    }, []);
+        const botIds = createBattleTeams(battleConfig).players.map((player) => player.numericId);
+        setBotPolicyConfig(botIds.reduce((config, botId) => ({ ...config, [botId]: BOT_POLICY_TYPES.none }), {}));
+    }, [battleConfig]);
 
     useEffect(() => {
         if (requiresLinearIntentModel(botPolicyConfig) && !linearIntentModel && !linearModelLoading) {
@@ -317,7 +351,7 @@ export function useSimulation() {
         setLatestBattleResult(null);
         setCurrentEvaluation(null);
 
-        const bot1 = new Bot(1, 'team-a');
+        const setup = createBattleTeams(battleConfig);
         const bot1Genome = trainer.getTopGenome();
         if (!bot1Genome) {
             isBattleRunningRef.current = false;
@@ -325,12 +359,6 @@ export function useSimulation() {
             setLinearModelError('No genome was available for the selected species. Try another species or retrain.');
             return;
         }
-        bot1.loadGenome(bot1Genome);
-
-        const bot2 = new Bot(2, 'team-a');
-        bot2.loadGenome(Genome.loadFromJSON(bot1Genome.serialize()));
-
-        const bot3 = new Bot(3, 'team-b');
         const bot3Genome = trainer.getTopGenome();
         if (!bot3Genome) {
             isBattleRunningRef.current = false;
@@ -338,30 +366,27 @@ export function useSimulation() {
             setLinearModelError('No opponent genome was available for the selected species. Try another species or retrain.');
             return;
         }
-        bot3.loadGenome(bot3Genome);
-        bot3.selectAIMethod(trainer.totalGenerations);
-
-        const bot4 = new Bot(4, 'team-b');
-        bot4.loadGenome(Genome.loadFromJSON(bot3Genome.serialize()));
-        bot4.selectAIMethod(trainer.totalGenerations);
-
-        [bot1, bot2, bot3, bot4].forEach((bot) => {
-            const policy = botPolicyConfig[bot.id];
-            bot.setPolicyMode(policy);
-            if (policy === BOT_POLICY_TYPES.linearIntent) {
-                bot.setLinearIntentModel(linearIntentModel);
-            }
+        const bots = setup.players.map((descriptor, index) => {
+            const teamIndex = Math.floor(index / setup.config.playersPerTeam);
+            const sourceGenome = teamIndex === 0 ? bot1Genome : bot3Genome;
+            const genome = descriptor.slotIndex === 0 ? sourceGenome : Genome.loadFromJSON(sourceGenome.serialize());
+            return createBotFromDescriptor(
+                descriptor,
+                genome,
+                trainer.totalGenerations,
+                botPolicyConfig,
+                linearIntentModel,
+                teamIndex > 0
+            );
         });
 
-        setBotStats({
-            1: bot1Genome.getStats(),
-            2: bot1Genome.getStats(),
-            3: bot3Genome.getStats(),
-            4: bot3Genome.getStats()
-        });
+        setBotStats(bots.reduce((stats, bot, index) => ({
+            ...stats,
+            [bot.id]: Math.floor(index / setup.config.playersPerTeam) === 0 ? bot1Genome.getStats() : bot3Genome.getStats()
+        }), {}));
 
-        const battleground = new Battleground();
-        battleground.addBots(bot1, bot2, bot3, bot4);
+        const battleground = new Battleground(setup.config);
+        battleground.addBots(...bots);
         battleground.start((results) => {
             if (!mountedRef.current) return;
 
@@ -375,8 +400,8 @@ export function useSimulation() {
             isBattleRunningRef.current = false;
             setIsBattleRunning(false);
             const fitness = Trainer.calculateBotFitnessFromResults(results, trainer.totalGenerations);
-            bot1.genome.addFitness(fitness);
-            bot1.genome.totalRounds++;
+            bots[0].genome.addFitness(fitness);
+            bots[0].genome.totalRounds++;
 
             if (trainer.getTotalRoundsRemaining() <= 0) {
                 trainer.newGeneration();
@@ -388,7 +413,7 @@ export function useSimulation() {
         }, (frame) => {
             if (mountedRef.current) setLatestLiveFrame(frame);
         });
-    }, [autoRunBattles, botPolicyConfig, linearIntentModel]);
+    }, [autoRunBattles, battleConfig, botPolicyConfig, linearIntentModel]);
 
     const selectSpecies = useCallback(async (speciesId) => {
         setLoading(true);
@@ -481,10 +506,105 @@ export function useSimulation() {
         setSessionTotals({});
     }, []);
 
+    const updateUserControlledAction = useCallback(() => {
+        const bot = baselineControlledBotRef.current;
+        if (!bot) return;
+
+        const keys = pressedKeysRef.current;
+        bot.setUserAction({
+            dx: (keys.has('d') || keys.has('arrowright') ? 15 : 0) - (keys.has('a') || keys.has('arrowleft') ? 15 : 0),
+            dy: (keys.has('s') || keys.has('arrowdown') ? 15 : 0) - (keys.has('w') || keys.has('arrowup') ? 15 : 0),
+            dh: (keys.has('e') ? 15 : 0) - (keys.has('q') ? 15 : 0),
+            ds: keys.has(' ')
+        });
+    }, []);
+
+    const runSoloBaseline = useCallback((policyType) => {
+        if (!mountedRef.current) return;
+        if (isBattleRunningRef.current) return;
+
+        const playerCount = 4;
+        const maxSteps = 600;
+        const seed = Number(baselineSeed) || 1;
+        const baselineConfig = {
+            mode: 'solo',
+            seed,
+            policyType,
+            playerCount,
+            maxSteps,
+            runLabel: policyType === 'user-controlled' ? 'Stage A Human Solo Baseline' : 'Stage A Random Solo Baseline'
+        };
+        const setup = createBattleTeams({ mode: 'solo', teamCount: playerCount, maxSteps });
+        const bots = setup.players.map((descriptor, index) => {
+            const bot = new Bot(descriptor.numericId, descriptor.teamId);
+            bot.actorId = descriptor.id;
+            const isHuman = policyType === 'user-controlled' && index === 0;
+            bot.setPolicyMode(isHuman ? BOT_POLICY_TYPES.userControlled : BOT_POLICY_TYPES.random);
+            if (isHuman) {
+                baselineControlledBotRef.current = bot;
+                updateUserControlledAction();
+            }
+            return bot;
+        });
+
+        isBattleRunningRef.current = true;
+        setIsBattleRunning(true);
+        setMode('live');
+        setLatestBattleResult(null);
+        setCurrentEvaluation(null);
+
+        const battleground = new Battleground({ mode: 'solo', teamCount: playerCount, maxSteps });
+        battleground.addBots(...bots);
+        battleground.start((results) => {
+            if (!mountedRef.current) return;
+
+            baselineControlledBotRef.current = null;
+            const trajectory = results.trajectory;
+            trajectory.baselineRun = baselineConfig;
+            trajectory.seed = seed;
+            const evaluation = evaluateTrajectory(trajectory);
+            const baselineResult = createBaselineRunResult({
+                config: baselineConfig,
+                trajectory,
+                evaluation
+            });
+
+            setLatestTrajectory(trajectory);
+            setLatestBattleResult(results);
+            setCurrentEvaluation(evaluation);
+            setBaselineResults((currentResults) => [baselineResult, ...currentResults]);
+            isBattleRunningRef.current = false;
+            setIsBattleRunning(false);
+        }, (frame) => {
+            if (mountedRef.current) setLatestLiveFrame(frame);
+        });
+    }, [baselineSeed, updateUserControlledAction]);
+
+    const downloadBaselineResults = useCallback(() => {
+        const rows = baselineResults.flatMap((result) => result.rows);
+        const payload = {
+            createdAt: new Date().toISOString(),
+            results: baselineResults,
+            summaries: summarizeBaselineRows(rows),
+            sameSeedGroups: groupBaselineRowsBySeed(rows)
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+        const objectUrl = window.URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = `stage-a-solo-baselines-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+        anchor.rel = 'noopener';
+        anchor.style.display = 'none';
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        window.URL.revokeObjectURL(objectUrl);
+    }, [baselineResults]);
+
     useEffect(() => {
         mountedRef.current = true;
-        liveEnvironmentRef.current.start(getCanvasIds('live'));
-        replayEnvironmentRef.current.start(getCanvasIds('replay'));
+        liveEnvironmentRef.current.start(getCanvasIds('live', battleConfig));
+        replayEnvironmentRef.current.start(getCanvasIds('replay', battleConfig));
         refreshSpecies().finally(() => setLoading(false));
         const refreshTimer = window.setInterval(refreshSpecies, 5000);
 
@@ -495,7 +615,40 @@ export function useSimulation() {
             liveEnvironmentRef.current.stop();
             replayEnvironmentRef.current.stop();
         };
-    }, [refreshSpecies, stopReplayPlayback]);
+    }, [battleConfig, refreshSpecies, stopReplayPlayback]);
+
+    useEffect(() => {
+        const onKeyDown = (event) => {
+            const key = event.key.toLowerCase();
+            if (['w', 'a', 's', 'd', 'q', 'e', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) {
+                pressedKeysRef.current.add(key);
+                updateUserControlledAction();
+                if (baselineControlledBotRef.current) {
+                    event.preventDefault();
+                }
+            }
+        };
+        const onKeyUp = (event) => {
+            const key = event.key.toLowerCase();
+            pressedKeysRef.current.delete(key);
+            updateUserControlledAction();
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+        };
+    }, [updateUserControlledAction]);
+
+    useEffect(() => {
+        const activeBotIds = createBattleTeams(battleConfig).players.map((player) => player.numericId);
+        if (!activeBotIds.includes(selectedBotId)) {
+            setSelectedBotId(activeBotIds[0] || 1);
+        }
+    }, [battleConfig, selectedBotId]);
 
     useEffect(() => {
         if (latestLiveFrame) {
@@ -506,6 +659,22 @@ export function useSimulation() {
     const replayStepFrame = useMemo(
         () => replayTrajectory ? getStepFrame(replayTrajectory, replayStepIndex) : null,
         [replayStepIndex, replayTrajectory]
+    );
+
+    const battleSetup = useMemo(
+        () => createBattleTeams(battleConfig),
+        [battleConfig]
+    );
+    const botIds = useMemo(
+        () => battleSetup.players.map((player) => player.numericId),
+        [battleSetup]
+    );
+    const actorIdByBotId = useMemo(
+        () => battleSetup.players.reduce((mapping, player) => ({
+            ...mapping,
+            [player.numericId]: player.id
+        }), {}),
+        [battleSetup]
     );
 
     const accumulatedEvaluation = useMemo(
@@ -545,12 +714,14 @@ export function useSimulation() {
 
     const selectedStats = botStats[selectedBotId] || {};
     const selectedReplayPlayer = replayStepFrame
-        ? getPlayerFrame(replayStepFrame, actorIdForBot(selectedBotId))
+        ? getPlayerFrame(replayStepFrame, actorIdByBotId[selectedBotId] || actorIdForBot(selectedBotId))
         : null;
     const runBattleRequiresLinearModel = requiresLinearIntentModel(botPolicyConfig);
+    const baselineRows = baselineResults.flatMap((result) => result.rows);
 
     return {
-        botIds: BOT_IDS,
+        botIds,
+        actorIdByBotId,
         botStats,
         autoRunBattles,
         accumulatedEvaluation,
@@ -572,6 +743,12 @@ export function useSimulation() {
         maxFitness: speciesData?.maxFitness,
         mode,
         botPolicyConfig,
+        battleConfig,
+        baselineResults,
+        baselineRows,
+        baselineSeed,
+        baselineSummaries: summarizeBaselineRows(baselineRows),
+        baselineSameSeedGroups: groupBaselineRowsBySeed(baselineRows),
         runBattleRequiresLinearModel,
         replayAutoPlay,
         replayError,
@@ -588,11 +765,14 @@ export function useSimulation() {
         setReplayStepIndex: setReplayStep,
         setSelectedBotId,
         setBotPolicyForBot,
+        setBattleConfig: (nextConfig) => setBattleConfig(resolveBattleConfig(nextConfig)),
+        setBaselineSeed,
+        runRandomSoloBaseline: () => runSoloBaseline('random'),
+        runUserControlledSoloBaseline: () => runSoloBaseline('user-controlled'),
+        downloadBaselineResults,
         setAllGenomePolicies,
         setAllLinearPolicies,
         setAllNonePolicies,
-        setTeamALinearVsTeamBGenome,
-        setTeamAGenomeVsTeamBLinear,
         setAutoRunBattles,
         resetScores,
         species,

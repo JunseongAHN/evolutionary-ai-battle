@@ -21,6 +21,7 @@ const isPrimaryProcess = cluster.isPrimary || cluster.isMaster;
 
 import Bot from '../agents/bot'
 import Battleground from '../simulation/battleground'
+import { DEFAULT_BATTLE_CONFIG, createBattleTeams } from '../simulation/battleSetup'
 import Trainer from '../training/trainer'
 import Genome from './genome'
 import log from '../../shared/logger'
@@ -166,22 +167,28 @@ function battleProcess() {
 
     process.on('message', (msg) => {
         try {
-            const bot1 = new Bot(1, 'team-a');
+            const setup = createBattleTeams(DEFAULT_BATTLE_CONFIG);
+            const descriptors = setup.players;
+            const bot1 = new Bot(descriptors[0].numericId, descriptors[0].teamId);
+            bot1.actorId = descriptors[0].id;
             const genome1 = Genome.loadFromJSON(msg.genomes[0]);
             bot1.loadGenome(genome1);
-            const bot1Teammate = new Bot(2, 'team-a');
+            const bot1Teammate = new Bot(descriptors[1].numericId, descriptors[1].teamId);
+            bot1Teammate.actorId = descriptors[1].id;
             bot1Teammate.loadGenome(Genome.loadFromJSON(msg.genomes[0]));
 
             // Bot 2 just does random stuff
-            const bot2 = new Bot(3, 'team-b');
+            const bot2 = new Bot(descriptors[2].numericId, descriptors[2].teamId);
+            bot2.actorId = descriptors[2].id;
             const genome2 = Genome.loadFromJSON(msg.genomes[1]);
             bot2.loadGenome(genome2);
             bot2.selectAIMethod(msg.totalGenerations);
-            const bot2Teammate = new Bot(4, 'team-b');
+            const bot2Teammate = new Bot(descriptors[3].numericId, descriptors[3].teamId);
+            bot2Teammate.actorId = descriptors[3].id;
             bot2Teammate.loadGenome(Genome.loadFromJSON(msg.genomes[1]));
             bot2Teammate.selectAIMethod(msg.totalGenerations);
 
-            const battleground = new Battleground()
+            const battleground = new Battleground(DEFAULT_BATTLE_CONFIG)
             battleground.addBots(bot1, bot1Teammate, bot2, bot2Teammate);
             battleground.start((results) => {
                 process.send({

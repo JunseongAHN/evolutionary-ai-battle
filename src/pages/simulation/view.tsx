@@ -10,11 +10,258 @@ import { LINEAR_INTENT_MODEL_URL } from '../../engine/policies/linearIntent/line
 import { loadLinearIntentModelFromUrl } from '../../engine/policies/linearIntent/linearIntentModel';
 import { BOT_POLICY_TYPES, formatBotPolicy } from './botPolicyConfig';
 
-function botLabel(botId) {
-    return botId <= 2 ? `Team A - Bot ${botId}` : `Team B - Bot ${botId}`;
+function getTeamLetter(teamIndex) {
+    return String.fromCharCode(65 + teamIndex);
 }
 
-function BattleEnvironment({ botIds, prefix, title, showBrains = true, children = null }) {
+function parseActorId(actorId) {
+    const match = String(actorId || '').match(/^team-(\d+)-(\d+)$/);
+    if (!match) {
+        return null;
+    }
+    return {
+        teamIndex: Number(match[1]),
+        slotIndex: Number(match[2])
+    };
+}
+
+function teamLabelFromActorId(actorId) {
+    const parsed = parseActorId(actorId);
+    if (!parsed) {
+        return 'Team';
+    }
+    return `team${getTeamLetter(parsed.teamIndex)}`;
+}
+
+function botLabelFromActorId(actorId) {
+    const parsed = parseActorId(actorId);
+    if (!parsed) {
+        return String(actorId || 'Bot');
+    }
+    const teamLetter = getTeamLetter(parsed.teamIndex);
+    return `bot${teamLetter}-${parsed.slotIndex + 1}`;
+}
+
+function botLabel(botId, actorIdByBotId = {}) {
+    return botLabelFromActorId(actorIdByBotId[botId]) || `Bot ${botId}`;
+}
+
+function getPolicyTeams(simulation) {
+    const rows = simulation.botIds.map((botId) => {
+        const actorId = simulation.actorIdByBotId[botId];
+        const parsed = parseActorId(actorId) || { teamIndex: botId - 1, slotIndex: 0 };
+        return {
+            botId,
+            actorId,
+            teamIndex: parsed.teamIndex,
+            teamName: teamLabelFromActorId(actorId),
+            botName: botLabelFromActorId(actorId),
+            policy: simulation.botPolicyConfig[botId] || BOT_POLICY_TYPES.genome
+        };
+    });
+
+    return rows.reduce((teams, row) => {
+        const current = teams.find((team) => team.teamIndex === row.teamIndex);
+        if (current) {
+            current.players.push(row);
+            return teams;
+        }
+        return [
+            ...teams,
+            {
+                teamIndex: row.teamIndex,
+                teamName: row.teamName,
+                players: [row]
+            }
+        ];
+    }, []);
+}
+
+function TeamPolicyCards({ simulation }) {
+    const teams = getPolicyTeams(simulation);
+
+    const setTeamPolicy = (team, policy) => {
+        team.players.forEach((player) => {
+            simulation.setBotPolicyForBot(player.botId, policy);
+        });
+    };
+
+    return (
+        <div className="team-policy-grid">
+            {teams.map((team) => (
+                <article className="selected-bot-panel team-policy-card" key={team.teamIndex}>
+                    <header className="team-policy-card-header">
+                        <h3>{team.teamName}</h3>
+                        <span>{team.players.length} bot{team.players.length === 1 ? '' : 's'}</span>
+                    </header>
+                    <div className="replay-controls">
+                        <button type="button" onClick={() => setTeamPolicy(team, BOT_POLICY_TYPES.genome)}>
+                            {team.teamName} Genome
+                        </button>
+                        <button type="button" onClick={() => setTeamPolicy(team, BOT_POLICY_TYPES.linearIntent)}>
+                            {team.teamName} Linear
+                        </button>
+                        <button type="button" onClick={() => setTeamPolicy(team, BOT_POLICY_TYPES.none)}>
+                            {team.teamName} None
+                        </button>
+                    </div>
+                    <div className="score-board-table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Bot</th>
+                                    <th>Player ID</th>
+                                    <th>Policy</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {team.players.map((player) => (
+                                    <tr key={player.botId}>
+                                        <td>{player.botName}</td>
+                                        <td>{player.actorId}</td>
+                                        <td>
+                                            <select
+                                                value={player.policy}
+                                                onChange={(event) => simulation.setBotPolicyForBot(player.botId, event.target.value)}
+                                            >
+                                                <option value={BOT_POLICY_TYPES.genome}>Genome</option>
+                                                <option value={BOT_POLICY_TYPES.linearIntent}>Linear Intent</option>
+                                                <option value={BOT_POLICY_TYPES.random}>Random</option>
+                                                <option value={BOT_POLICY_TYPES.userControlled}>User Controlled</option>
+                                                <option value={BOT_POLICY_TYPES.none}>None</option>
+                                            </select>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </article>
+            ))}
+        </div>
+    );
+}
+
+function StageABaselinePanel({ simulation }) {
+    const rows = simulation.baselineRows || [];
+    const summaries = simulation.baselineSummaries || [];
+
+    return (
+        <section className="score-board">
+            <h2>Stage A Solo Combat Baseline</h2>
+            <div className="replay-controls">
+                <label>
+                    <span>Seed</span>
+                    <input
+                        min="1"
+                        step="1"
+                        type="number"
+                        value={simulation.baselineSeed}
+                        onChange={(event) => simulation.setBaselineSeed(Number(event.target.value))}
+                        disabled={simulation.isBattleRunning}
+                    />
+                </label>
+                <button
+                    type="button"
+                    onClick={simulation.runRandomSoloBaseline}
+                    disabled={simulation.isBattleRunning}
+                >
+                    Run Random Solo
+                </button>
+                <button
+                    type="button"
+                    onClick={simulation.runUserControlledSoloBaseline}
+                    disabled={simulation.isBattleRunning}
+                >
+                    Run User-Controlled Solo
+                </button>
+                <button
+                    type="button"
+                    onClick={simulation.downloadBaselineResults}
+                    disabled={!rows.length}
+                >
+                    Export Baselines JSON
+                </button>
+            </div>
+            <p>User control: WASD or arrow keys move, Q/E rotate, Space fires.</p>
+            <div className="score-board-table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Run</th>
+                            <th>Seed</th>
+                            <th>Policy</th>
+                            <th>Player</th>
+                            <th>Dmg Dealt</th>
+                            <th>Dmg Taken</th>
+                            <th>Survival</th>
+                            <th>Alive End</th>
+                            <th>Kills</th>
+                            <th>Deaths</th>
+                            <th>Waste Fire</th>
+                            <th>Coop</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((row) => (
+                            <tr key={`${row.runId}-${row.playerId}`}>
+                                <td>{row.runLabel || row.runId}</td>
+                                <td>{row.seed}</td>
+                                <td>{row.policyType}</td>
+                                <td>{row.playerId}</td>
+                                <td>{row.damageDealt}</td>
+                                <td>{row.damageTaken}</td>
+                                <td>{row.survivalSteps}</td>
+                                <td>{row.aliveAtEnd ? 'yes' : 'no'}</td>
+                                <td>{row.kills ?? 'N/A'}</td>
+                                <td>{row.deaths ?? 'N/A'}</td>
+                                <td>{row.wastefulFireCount ?? 'N/A'}</td>
+                                <td>{row.cooperation?.applicable ? 'applicable' : 'N/A'}</td>
+                            </tr>
+                        ))}
+                        {!rows.length && (
+                            <tr>
+                                <td colSpan="12">No Stage A baseline runs yet.</td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+            {!!summaries.length && (
+                <div className="score-board-table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Policy</th>
+                                <th>Runs</th>
+                                <th>Avg Dmg Dealt</th>
+                                <th>Avg Dmg Taken</th>
+                                <th>Avg Survival</th>
+                                <th>Survival Rate</th>
+                                <th>Seeds</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {summaries.map((summary) => (
+                                <tr key={summary.policyType}>
+                                    <td>{summary.policyType}</td>
+                                    <td>{summary.runCount}</td>
+                                    <td>{summary.avgDamageDealt}</td>
+                                    <td>{summary.avgDamageTaken}</td>
+                                    <td>{summary.avgSurvivalSteps}</td>
+                                    <td>{Math.round(summary.survivalRate * 100)}%</td>
+                                    <td>{summary.seeds.join(', ')}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </section>
+    );
+}
+
+function BattleEnvironment({ botIds, actorIdByBotId = {}, prefix, title, showBrains = true, children = null }) {
     return (
         <section className="battle-environment">
             <h2>{title}</h2>
@@ -24,7 +271,7 @@ function BattleEnvironment({ botIds, prefix, title, showBrains = true, children 
                 <div className="brain-grid">
                     {botIds.map((botId) => (
                         <div className="brain-board" key={botId}>
-                            <h4>{botLabel(botId)} Brain</h4>
+                            <h4>{botLabel(botId, actorIdByBotId)} Brain</h4>
                             <canvas id={`${prefix}-bot${botId}brain`} width="400" height="400" />
                         </div>
                     ))}
@@ -48,7 +295,7 @@ function LiveBattleSummary({ simulation }) {
                     const bot = bots.find((candidate) => candidate.id === botId);
                     return (
                         <article className="selected-bot-panel" key={botId}>
-                            <strong>{botLabel(botId)}</strong>
+                            <strong>{botLabel(botId, simulation.actorIdByBotId)}</strong>
                             <p>HP: {bot?.lives ?? '-'}</p>
                             <p>Status: {bot ? (bot.lives > 0 ? 'Alive' : 'Eliminated') : 'Waiting'}</p>
                         </article>
@@ -133,12 +380,12 @@ function BotDetails({ simulation, replay = false }) {
                         onClick={() => simulation.setSelectedBotId(botId)}
                         type="button"
                     >
-                        Bot {botId}
+                        {botLabel(botId, simulation.actorIdByBotId)}
                     </button>
                 ))}
             </div>
             <div className="selected-bot-panel">
-                <h4>{botLabel(simulation.selectedBotId)}</h4>
+                <h4>{botLabel(simulation.selectedBotId, simulation.actorIdByBotId)}</h4>
                 <p>Previous Fitness: {stats.lastFitness ?? 'NEW'}</p>
                 <p>Current Fitness: {stats.fitness ?? 'NEW'}</p>
                 {!replay && selectedPolicy === BOT_POLICY_TYPES.linearIntent && liveDecision && (
@@ -290,11 +537,40 @@ export function SimulationPage() {
             </section>
             <section className="linear-intent-controls">
                 <h2>Battle Policy</h2>
+                <div className="replay-controls">
+                    <label>
+                        <span>Mode</span>
+                        <select
+                            value={simulation.battleConfig.mode}
+                            onChange={(event) => simulation.setBattleConfig({
+                                mode: event.target.value,
+                                teamCount: simulation.battleConfig.teamCount
+                            })}
+                            disabled={simulation.isBattleRunning}
+                        >
+                            <option value="duo">Duo</option>
+                            <option value="solo">Solo</option>
+                        </select>
+                    </label>
+                    {simulation.battleConfig.mode === 'duo' && (
+                        <label>
+                            <span>Teams</span>
+                            <input
+                                min="2"
+                                step="1"
+                                type="number"
+                                value={simulation.battleConfig.teamCount}
+                                onChange={(event) => simulation.setBattleConfig({
+                                    mode: simulation.battleConfig.mode,
+                                    teamCount: Number(event.target.value)
+                                })}
+                                disabled={simulation.isBattleRunning}
+                            />
+                        </label>
+                    )}
+                </div>
                 <p>Current Assignment Summary:</p>
-                <p>
-                    Bot 1: {formatBotPolicy(simulation.botPolicyConfig[1])} | Bot 2: {formatBotPolicy(simulation.botPolicyConfig[2])} |
-                    Bot 3: {formatBotPolicy(simulation.botPolicyConfig[3])} | Bot 4: {formatBotPolicy(simulation.botPolicyConfig[4])}
-                </p>
+                <TeamPolicyCards simulation={simulation} />
                 <div className="replay-controls">
                     <button onClick={simulation.setAllGenomePolicies} type="button">
                         All Genome
@@ -305,27 +581,6 @@ export function SimulationPage() {
                     <button onClick={simulation.setAllNonePolicies} type="button">
                         All None
                     </button>
-                    <button onClick={simulation.setTeamALinearVsTeamBGenome} type="button">
-                        Team A Linear vs Team B Genome
-                    </button>
-                    <button onClick={simulation.setTeamAGenomeVsTeamBLinear} type="button">
-                        Team A Genome vs Team B Linear
-                    </button>
-                </div>
-                <div className="bot-button-row">
-                    {[1, 2, 3, 4].map((botId) => (
-                        <label key={botId} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                            <span>Bot {botId} Policy</span>
-                            <select
-                                value={simulation.botPolicyConfig[botId]}
-                                onChange={(event) => simulation.setBotPolicyForBot(botId, event.target.value)}
-                            >
-                                <option value={BOT_POLICY_TYPES.genome}>Genome</option>
-                                <option value={BOT_POLICY_TYPES.linearIntent}>Linear Intent</option>
-                                <option value={BOT_POLICY_TYPES.none}>None</option>
-                            </select>
-                        </label>
-                    ))}
                 </div>
                 <div className="replay-controls">
                     <button onClick={simulation.loadLinearIntentModel} disabled={simulation.linearModelLoading}>
@@ -350,7 +605,13 @@ export function SimulationPage() {
             </section>
             <main id="battle">
                 <div className="battle-layout">
-                    <BattleEnvironment botIds={simulation.botIds} prefix="live" title="Live Battle" showBrains={false}>
+                    <BattleEnvironment
+                        actorIdByBotId={simulation.actorIdByBotId}
+                        botIds={simulation.botIds}
+                        prefix="live"
+                        title="Live Battle"
+                        showBrains={false}
+                    >
                         <LiveBattleSummary simulation={simulation} />
                     </BattleEnvironment>
                     <BotDetails simulation={simulation} />
@@ -387,7 +648,12 @@ export function SimulationPage() {
                 </section>
                 <section className="replay-section">
                     <div className="battle-layout">
-                        <BattleEnvironment botIds={simulation.botIds} prefix="replay" title="Replay Viewer" />
+                        <BattleEnvironment
+                            actorIdByBotId={simulation.actorIdByBotId}
+                            botIds={simulation.botIds}
+                            prefix="replay"
+                            title="Replay Viewer"
+                        />
                         <BotDetails simulation={simulation} replay />
                     </div>
                     <section className="replay-controls">
@@ -430,7 +696,7 @@ export function SimulationPage() {
                         trajectory={simulation.replayTrajectory}
                         scenario={selectedScenario}
                         replayStepIndex={simulation.replayStepIndex}
-                        selectedActorId={actorIdForBot(simulation.selectedBotId)}
+                        selectedActorId={simulation.actorIdByBotId[simulation.selectedBotId] || actorIdForBot(simulation.selectedBotId)}
                         replayStepFrame={replayStepFrame}
                     />
                 </section>
@@ -439,6 +705,7 @@ export function SimulationPage() {
                     currentEvaluation={simulation.currentEvaluation}
                     onResetScores={simulation.resetScores}
                 />
+                <StageABaselinePanel simulation={simulation} />
             </main>
             <LinearIntentModelDemo />
         </>
