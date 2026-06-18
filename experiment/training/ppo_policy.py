@@ -26,7 +26,7 @@ OBS_KEYS = (
     "step_count",
 )
 
-OBS_DIM = 16
+OBS_DIM = 13
 
 
 @dataclass(frozen=True)

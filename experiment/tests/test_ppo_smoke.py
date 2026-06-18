@@ -25,7 +25,7 @@ def test_policy_forward_on_env_reset_observation():
 
     move_logits, aim_logits, fire_logits, value = policy(obs)
 
-    assert flatten_observation(obs).shape[-1] == 16
+    assert flatten_observation(obs).shape[-1] == 13
     assert move_logits.shape[-1] == MOVE_BINS
     assert aim_logits.shape[-1] == AIM_BINS
     assert fire_logits.shape[-1] == FIRE_BINS
@@ -73,7 +73,7 @@ def test_short_rollout_and_gae_shapes():
         cfg.gae_lambda,
     )
 
-    assert rollout["observations"].shape == torch.Size([8, 16])
+    assert rollout["observations"].shape == torch.Size([8, 13])
     assert advantages.shape == torch.Size([8])
     assert returns.shape == torch.Size([8])
 
