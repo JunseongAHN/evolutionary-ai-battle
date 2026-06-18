@@ -9,6 +9,8 @@ It is intentionally not a full PPO pipeline yet.
 - `cpc_actions.py` defines the first multi-discrete action channels.
 - `cpc_env.py` contains a deterministic toy CPC environment with `reset()` and `step()`.
 - `cpc_metrics.py` accumulates basic teammate usefulness metrics.
+- `torchrl_specs.py` keeps small TorchRL spec compatibility helpers.
+- `torchrl_env.py` adapts the toy env to TorchRL `EnvBase` / `TensorDict`.
 
 ## Action Model
 
@@ -50,14 +52,34 @@ The notebook demonstrates:
 - basic CPC metrics
 - a sample trajectory JSON-like object
 - optional TorchRL spec mapping if TorchRL is installed
+- PR2 TorchRL wrapper reset, action sampling, stepping, and optional spec checks
+
+## Tests
+
+From the repo root:
+
+```powershell
+pytest experiment/tests/test_torchrl_env.py
+```
+
+The TorchRL wrapper tests skip if `torch`, `torchrl`, or `tensordict` is not installed.
 
 ## Design Constraint
 
 The common schema stays framework-independent. TorchRL-specific code should live in this experiment/training layer, not in `schema.py` or the shared engine schema.
 
+## PR Progression
+
+PR1 proved the toy CPC loop and action decoding.
+
+PR2 proves the toy CPC loop can be represented as a TorchRL environment. The wrapper is thin: it maps the existing toy observation/action/reward data into TensorDicts and specs, while keeping the environment logic in `cpc_env.py`.
+
+PR3 should add PPO smoke training with separate policy heads for `move`, `aim`, and `fire`.
+
+PPO is intentionally not included in PR2 so the adapter and specs can be validated before adding collectors, losses, checkpointing, or policy architecture.
+
 ## TODO
 
-- Add a TorchRL `EnvBase` adapter around this toy environment.
 - Add multi-head PPO actor outputs for `move`, `aim`, and `fire`.
 - Add collector, GAE, PPO loss, and checkpointing.
 - Bridge exported toy trajectories into the full replay viewer format.
