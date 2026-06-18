@@ -1,0 +1,16 @@
+seed: 0
+device: cpu
+total_steps: 256
+rollout_steps: 64
+num_epochs: 2
+minibatch_size: 32
+gamma: 0.99
+gae_lambda: 0.95
+clip_epsilon: 0.2
+entropy_coef: 0.01
+value_coef: 0.5
+learning_rate: 0.0003
+max_grad_norm: 0.5
+max_episode_steps: 50
+hidden_dim: 64
+run_dir: experiment/runs

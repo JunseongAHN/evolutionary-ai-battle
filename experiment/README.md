@@ -11,6 +11,10 @@ It is intentionally not a full PPO pipeline yet.
 - `cpc_metrics.py` accumulates basic teammate usefulness metrics.
 - `torchrl_specs.py` keeps small TorchRL spec compatibility helpers.
 - `torchrl_env.py` adapts the toy env to TorchRL `EnvBase` / `TensorDict`.
+- `ppo_policy.py` defines the small multi-head actor-critic.
+- `train_ppo.py` runs minimal PPO smoke training.
+- `eval_ppo.py` evaluates a saved smoke checkpoint.
+- `configs/ppo_smoke.yaml` contains tiny smoke defaults.
 
 ## Action Model
 
@@ -53,6 +57,7 @@ The notebook demonstrates:
 - a sample trajectory JSON-like object
 - optional TorchRL spec mapping if TorchRL is installed
 - PR2 TorchRL wrapper reset, action sampling, stepping, and optional spec checks
+- PR3 policy forward pass, rollout, smoke training, checkpoint load, and eval
 
 ## Tests
 
@@ -60,9 +65,32 @@ From the repo root:
 
 ```powershell
 pytest experiment/tests/test_torchrl_env.py
+python -m pytest experiment/test_ppo_smoke.py
 ```
 
-The TorchRL wrapper tests skip if `torch`, `torchrl`, or `tensordict` is not installed.
+The TorchRL/PPO tests skip if `torch`, `torchrl`, or `tensordict` is not installed.
+
+## PPO Smoke Training
+
+Run:
+
+```powershell
+python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --smoke
+```
+
+This writes a run directory under `experiment/runs/ppo_smoke_<timestamp>/` with:
+
+- `checkpoint.pt`
+- `metrics.csv`
+- `config.json`
+
+Evaluate:
+
+```powershell
+python experiment/eval_ppo.py --checkpoint experiment/runs/<run>/checkpoint.pt
+```
+
+PR3 uses a manual PyTorch PPO loss while still training through `TorchRLCPCEnv`. This is intentional: the acceptance target is smoke validation of rollouts, multi-discrete log-probs, PPO shapes, metrics, and checkpointing. A future PR can replace the manual loop with TorchRL collectors/loss modules after the adapter surface is stable.
 
 ## Design Constraint
 
@@ -74,12 +102,14 @@ PR1 proved the toy CPC loop and action decoding.
 
 PR2 proves the toy CPC loop can be represented as a TorchRL environment. The wrapper is thin: it maps the existing toy observation/action/reward data into TensorDicts and specs, while keeping the environment logic in `cpc_env.py`.
 
-PR3 should add PPO smoke training with separate policy heads for `move`, `aim`, and `fire`.
+PR3 adds PPO smoke training with separate policy heads for `move`, `aim`, and `fire`.
 
-PPO is intentionally not included in PR2 so the adapter and specs can be validated before adding collectors, losses, checkpointing, or policy architecture.
+The goal is not policy performance. The goal is proving the training loop can reset/step the TorchRL wrapper, collect rollouts, compute advantages, run PPO loss, and save artifacts.
+
+PR4 should add scenario GT evaluation, trajectory export, and a richer CPC metric report.
 
 ## TODO
 
-- Add multi-head PPO actor outputs for `move`, `aim`, and `fire`.
-- Add collector, GAE, PPO loss, and checkpointing.
-- Bridge exported toy trajectories into the full replay viewer format.
+- Add scenario GT evaluation.
+- Add trajectory export compatible with the replay viewer.
+- Add richer CPC metric summaries.
