@@ -1,2 +1,1 @@
-"""Framework-specific adapters for the pure CPC core."""
-
+"""Adapters package reserved for future external environment bridges."""

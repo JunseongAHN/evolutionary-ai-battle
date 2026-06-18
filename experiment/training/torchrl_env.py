@@ -7,14 +7,14 @@ import torch
 from tensordict import TensorDict
 from torchrl.envs import EnvBase
 
-try:
-    from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
-    from cpc_env import CPCEnv
-    from torchrl_specs import categorical_spec, composite_spec, unbounded_spec
-except ImportError:
+if __package__:
     from .cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
     from .cpc_env import CPCEnv
     from .torchrl_specs import categorical_spec, composite_spec, unbounded_spec
+else:
+    from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
+    from cpc_env import CPCEnv
+    from torchrl_specs import categorical_spec, composite_spec, unbounded_spec
 
 
 REWARD_COMPONENT_KEYS = (

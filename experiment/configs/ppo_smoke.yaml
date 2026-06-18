@@ -1,5 +1,5 @@
 seed: 0
-device: cpu
+device: auto
 total_steps: 256
 rollout_steps: 64
 num_epochs: 2

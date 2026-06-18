@@ -13,9 +13,9 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("torchrl")
 pytest.importorskip("tensordict")
 
-from ppo_policy import AIM_BINS, FIRE_BINS, MOVE_BINS, MultiDiscreteActorCritic, flatten_observation
-from torchrl_env import TorchRLCPCEnv
-from train_ppo import PPOConfig, collect_rollout, compute_gae, ppo_update, train_ppo
+from training.ppo_policy import AIM_BINS, FIRE_BINS, MOVE_BINS, MultiDiscreteActorCritic, flatten_observation
+from training.torchrl_env import TorchRLCPCEnv
+from training.train_ppo import PPOConfig, collect_rollout, compute_gae, ppo_update, train_ppo
 
 
 def test_policy_forward_on_env_reset_observation():

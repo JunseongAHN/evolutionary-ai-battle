@@ -5,12 +5,12 @@ import random
 from copy import deepcopy
 from typing import Any
 
-try:
-    from cpc_actions import RawAction, decode_action, random_action
-    from cpc_metrics import CpcMetrics
-except ImportError:
+if __package__:
     from .cpc_actions import RawAction, decode_action, random_action
     from .cpc_metrics import CpcMetrics
+else:
+    from cpc_actions import RawAction, decode_action, random_action
+    from cpc_metrics import CpcMetrics
 
 
 Vec2 = dict[str, float]

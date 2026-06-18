@@ -6,12 +6,12 @@ from pathlib import Path
 
 import torch
 
-try:
-    from ppo_policy import MultiDiscreteActorCritic
-    from torchrl_env import TorchRLCPCEnv
-except ImportError:
+if __package__:
     from .ppo_policy import MultiDiscreteActorCritic
     from .torchrl_env import TorchRLCPCEnv
+else:
+    from ppo_policy import MultiDiscreteActorCritic
+    from torchrl_env import TorchRLCPCEnv
 
 
 @torch.no_grad()

@@ -13,8 +13,8 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("torchrl")
 pytest.importorskip("tensordict")
 
-from torchrl_env import TorchRLCPCEnv
-from torchrl_specs import import_check_env_specs
+from training.torchrl_env import TorchRLCPCEnv
+from training.torchrl_specs import import_check_env_specs
 
 
 def test_torchrl_cpc_env_constructs_and_resets():

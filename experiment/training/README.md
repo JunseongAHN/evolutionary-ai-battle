@@ -1,11 +1,10 @@
 # CPC TorchRL Experiment Scaffold
 
-This folder contains the first small Python scaffold for a TorchRL-oriented CPC experiment.
-It is intentionally not a full PPO pipeline yet.
+This folder is the `training` Python module for the small TorchRL-oriented CPC experiment scaffold.
 
 ## Files
 
-- `training.ipynb` is the initiating notebook and demo entry point.
+- `../training.ipynb` is the initiating notebook and demo entry point.
 - `cpc_actions.py` defines the first multi-discrete action channels.
 - `cpc_env.py` contains a deterministic toy CPC environment with `reset()` and `step()`.
 - `cpc_metrics.py` accumulates basic teammate usefulness metrics.
@@ -14,7 +13,7 @@ It is intentionally not a full PPO pipeline yet.
 - `ppo_policy.py` defines the small multi-head actor-critic.
 - `train_ppo.py` runs minimal PPO smoke training.
 - `eval_ppo.py` evaluates a saved smoke checkpoint.
-- `configs/ppo_smoke.yaml` contains tiny smoke defaults.
+- `../configs/ppo_smoke.yaml` contains tiny smoke defaults.
 
 ## Action Model
 
@@ -65,7 +64,7 @@ From the repo root:
 
 ```powershell
 pytest experiment/tests/test_torchrl_env.py
-python -m pytest experiment/test_ppo_smoke.py
+python -m pytest experiment/tests/test_ppo_smoke.py
 ```
 
 The TorchRL/PPO tests skip if `torch`, `torchrl`, or `tensordict` is not installed.
@@ -75,7 +74,7 @@ The TorchRL/PPO tests skip if `torch`, `torchrl`, or `tensordict` is not install
 Run:
 
 ```powershell
-python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --smoke
+python experiment/training/train_ppo.py --config experiment/configs/ppo_smoke.yaml --smoke
 ```
 
 This writes a run directory under `experiment/runs/ppo_smoke_<timestamp>/` with:
@@ -87,7 +86,7 @@ This writes a run directory under `experiment/runs/ppo_smoke_<timestamp>/` with:
 Evaluate:
 
 ```powershell
-python experiment/eval_ppo.py --checkpoint experiment/runs/<run>/checkpoint.pt
+python experiment/training/eval_ppo.py --checkpoint experiment/runs/<run>/checkpoint.pt
 ```
 
 PR3 uses a manual PyTorch PPO loss while still training through `TorchRLCPCEnv`. This is intentional: the acceptance target is smoke validation of rollouts, multi-discrete log-probs, PPO shapes, metrics, and checkpointing. A future PR can replace the manual loop with TorchRL collectors/loss modules after the adapter surface is stable.

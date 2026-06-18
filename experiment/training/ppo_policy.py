@@ -7,10 +7,10 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-try:
-    from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
-except ImportError:
+if __package__:
     from .cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
+else:
+    from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
 
 
 OBS_KEYS = (
