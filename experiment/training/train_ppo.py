@@ -5,6 +5,7 @@ import csv
 import json
 import random
 import shutil
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -224,7 +225,7 @@ def ppo_update(
     return last_stats
 
 
-def train_ppo(cfg: PPOConfig) -> dict[str, Any]:
+def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
     random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
     device = resolve_device(cfg.device)
@@ -311,6 +312,22 @@ def train_ppo(cfg: PPOConfig) -> dict[str, Any]:
         row["is_selected_checkpoint"] = is_selected
         rows.append(row)
         _write_metrics(metrics_path, rows)
+        if progress:
+            print(
+                json.dumps(
+                    {
+                        "update": row["update"],
+                        "step": row["step"],
+                        "total_steps": cfg.total_steps,
+                        "episodic_return_mean": row["episodic_return_mean"],
+                        "eval_mean_episode_reward": row["eval_mean_episode_reward"],
+                        "selection_value": row["selection_value"],
+                        "is_selected_checkpoint": row["is_selected_checkpoint"],
+                    }
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
 
     checkpoint_path = run_dir / "checkpoint.pt"
     shutil.copy2(paths["checkpoint_latest"], checkpoint_path)
@@ -325,6 +342,8 @@ def train_ppo(cfg: PPOConfig) -> dict[str, Any]:
         "selection_metric": cfg.selection_metric,
         "selection_mode": cfg.selection_mode,
         "selection_value": selected_metadata.get("selection_value"),
+        "updates": len(rows),
+        "global_step": steps,
         "metrics_csv": str(metrics_path),
         "device": str(device),
         "last_metrics": rows[-1] if rows else {},
@@ -478,8 +497,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run a minimal PPO smoke train on TorchRLCPCEnv.")
     parser.add_argument("--config", default="experiment/configs/ppo_smoke.yaml")
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--progress", action="store_true")
     args = parser.parse_args()
-    result = train_ppo(load_config(args.config, smoke=args.smoke))
+    result = train_ppo(load_config(args.config, smoke=args.smoke), progress=args.progress)
     print(json.dumps(result, indent=2))
 
 
