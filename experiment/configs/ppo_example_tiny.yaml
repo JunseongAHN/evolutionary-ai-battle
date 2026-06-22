@@ -15,5 +15,5 @@ max_episode_steps: 50
 hidden_dim: 64
 run_dir: experiment/runs
 selection_metric: eval_mean_episode_reward
-selection_mode: min
+selection_mode: max
 selection_eval_episodes: 2

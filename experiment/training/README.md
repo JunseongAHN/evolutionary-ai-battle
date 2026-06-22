@@ -74,13 +74,14 @@ The TorchRL/PPO tests skip if `torch`, `torchrl`, or `tensordict` is not install
 Run:
 
 ```powershell
-python experiment/training/train_ppo.py --config experiment/configs/ppo_smoke.yaml --smoke
+python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --progress
 ```
 
 This writes a run directory under `experiment/runs/ppo_smoke_<timestamp>/` with:
 
 - `checkpoint_latest.pt`
-- `checkpoint_min_reward.pt`
+- `checkpoint_max_reward.pt`
+- `checkpoint_selected.pt`
 - `selected_reward_checkpoint.json`
 - `checkpoint.pt`
 - `metrics.csv`
@@ -97,20 +98,21 @@ python experiment/training/eval_ppo.py --checkpoint experiment/runs/<run>/checkp
 Training also writes a reward-selected checkpoint. By default the config uses:
 
 - `selection_metric: eval_mean_episode_reward`
-- `selection_mode: min`
+- `selection_mode: max`
 
 The selected files are:
 
 - `checkpoint_latest.pt`: most recent update
-- `checkpoint_min_reward.pt`: selected low-reward checkpoint
+- `checkpoint_max_reward.pt`: selected max-reward checkpoint
+- `checkpoint_selected.pt`: selected checkpoint for the active selection mode
 - `selected_reward_checkpoint.json`: selected update, global step, metric, mode, and value
 
-The min-reward checkpoint is useful for inspecting failure behavior in GUI/debug eval. It is not called the best policy because the selection depends on the configured metric and mode.
+The default max-reward checkpoint is useful for inspecting the currently strongest policy under the configured eval reward. Switch to `selection_mode: min` only when intentionally inspecting failure behavior.
 
 ```powershell
-python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --smoke
-python experiment/eval_ppo.py --checkpoint experiment/runs/<run>/checkpoint_min_reward.pt --episodes 10 --device cpu --deterministic
-python experiment/run_model_agents.py --checkpoint-a experiment/runs/<run>/checkpoint_min_reward.pt --checkpoint-b experiment/runs/<run>/checkpoint_min_reward.pt --episodes 1 --device cpu --deterministic --export experiment/runs/<run>/two_agent_min_reward_eval.json
+python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --progress
+python experiment/eval_ppo.py --checkpoint experiment/runs/<run>/checkpoint_selected.pt --episodes 10 --device cpu --deterministic
+python experiment/run_model_agents.py --checkpoint-a experiment/runs/<run>/checkpoint_selected.pt --checkpoint-b experiment/runs/<run>/checkpoint_selected.pt --episodes 1 --device cpu --deterministic --export experiment/runs/<run>/two_agent_selected_eval.json
 ```
 
 The current toy `CPCEnv` supports one controllable self agent. Two-agent model use is blocked in the runner with a clear error until a multi-agent Python env is available. The environment remains model-agnostic.

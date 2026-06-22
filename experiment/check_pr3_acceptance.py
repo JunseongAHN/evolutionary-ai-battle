@@ -272,7 +272,9 @@ def run_acceptance(
         "run_dir": result["run_dir"],
         "checkpoint": result["checkpoint"],
         "checkpoint_latest": result.get("checkpoint_latest", result["checkpoint"]),
+        "checkpoint_selected": result.get("checkpoint_selected", result["checkpoint"]),
         "checkpoint_min_reward": result.get("checkpoint_min_reward", result["checkpoint"]),
+        "checkpoint_max_reward": result.get("checkpoint_max_reward", result["checkpoint"]),
         "selected_reward_checkpoint": result.get("selected_reward_checkpoint", ""),
         "metrics_csv": result["metrics_csv"],
     }

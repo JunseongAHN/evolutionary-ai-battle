@@ -37,23 +37,24 @@ def tiny_cfg(tmp_path: pathlib.Path) -> PPOConfig:
     )
 
 
-def test_checkpoint_min_reward_is_saved(tmp_path):
+def test_checkpoint_max_reward_is_saved(tmp_path):
     result = train_ppo(tiny_cfg(tmp_path))
 
     assert pathlib.Path(result["checkpoint_latest"]).exists()
-    assert pathlib.Path(result["checkpoint_min_reward"]).exists()
+    assert pathlib.Path(result["checkpoint_max_reward"]).exists()
+    assert pathlib.Path(result["checkpoint_selected"]).exists()
     assert pathlib.Path(result["selected_reward_checkpoint"]).exists()
 
     metadata = json.loads(pathlib.Path(result["selected_reward_checkpoint"]).read_text(encoding="utf-8"))
     assert metadata["selection_metric"] == "eval_mean_episode_reward"
-    assert metadata["selection_mode"] == "min"
+    assert metadata["selection_mode"] == "max"
     assert metadata["selection_value"] is not None
     assert metadata["selected_update"] is not None
 
 
-def test_selected_checkpoint_uses_min_reward(tmp_path):
+def test_selected_checkpoint_uses_max_reward(tmp_path):
     latest = tmp_path / "checkpoint_latest.pt"
-    selected = tmp_path / "checkpoint_min_reward.pt"
+    selected = tmp_path / "checkpoint_max_reward.pt"
     metadata = tmp_path / "selected_reward_checkpoint.json"
     latest.write_bytes(b"checkpoint-a")
 
@@ -66,7 +67,7 @@ def test_selected_checkpoint_uses_min_reward(tmp_path):
         global_step=8,
         metrics={"selection_value": 2.0},
         selection_metric="episodic_return_mean",
-        selection_mode="min",
+        selection_mode="max",
         selection_value=2.0,
     )
     latest.write_bytes(b"checkpoint-b")
@@ -79,20 +80,20 @@ def test_selected_checkpoint_uses_min_reward(tmp_path):
         global_step=16,
         metrics={"selection_value": -1.0},
         selection_metric="episodic_return_mean",
-        selection_mode="min",
-        selection_value=-1.0,
+        selection_mode="max",
+        selection_value=3.0,
     )
 
     assert first_selected is True
     assert first_value == 2.0
     assert second_selected is True
-    assert second_value == -1.0
+    assert second_value == 3.0
     assert selected.read_bytes() == b"checkpoint-b"
 
 
 def test_checkpoint_load_to_agent(tmp_path):
     result = train_ppo(tiny_cfg(tmp_path))
-    agent = PPOPolicyAgent.from_checkpoint(result["checkpoint_min_reward"], device="cpu")
+    agent = PPOPolicyAgent.from_checkpoint(result["checkpoint_selected"], device="cpu")
     observation = CPCEnv(seed=1, max_steps=4).reset()
 
     action = agent.act(observation)
@@ -105,7 +106,7 @@ def test_checkpoint_load_to_agent(tmp_path):
 
 def test_deterministic_agent_action_is_stable(tmp_path):
     result = train_ppo(tiny_cfg(tmp_path))
-    agent = PPOPolicyAgent.from_checkpoint(result["checkpoint_min_reward"], device="cpu")
+    agent = PPOPolicyAgent.from_checkpoint(result["checkpoint_selected"], device="cpu")
     observation = CPCEnv(seed=1, max_steps=4).reset()
 
     assert agent.act(observation, deterministic=True) == agent.act(observation, deterministic=True)
@@ -113,7 +114,7 @@ def test_deterministic_agent_action_is_stable(tmp_path):
 
 def test_sampled_agent_action_valid(tmp_path):
     result = train_ppo(tiny_cfg(tmp_path))
-    agent = PPOPolicyAgent.from_checkpoint(result["checkpoint_min_reward"], device="cpu")
+    agent = PPOPolicyAgent.from_checkpoint(result["checkpoint_selected"], device="cpu")
     observation = CPCEnv(seed=1, max_steps=4).reset()
 
     action = agent.act(observation, deterministic=False)
@@ -135,7 +136,7 @@ def test_two_agent_runner_loads_same_checkpoint_for_two_agents(tmp_path):
 
     with pytest.raises(NotImplementedError, match="one controllable self agent"):
         run_two_agent_eval(
-            checkpoint_a=result["checkpoint_min_reward"],
+            checkpoint_a=result["checkpoint_selected"],
             checkpoint_b=None,
             episodes=1,
             device="cpu",

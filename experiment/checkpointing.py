@@ -12,6 +12,8 @@ import torch
 
 LATEST_CHECKPOINT_NAME = "checkpoint_latest.pt"
 MIN_REWARD_CHECKPOINT_NAME = "checkpoint_min_reward.pt"
+MAX_REWARD_CHECKPOINT_NAME = "checkpoint_max_reward.pt"
+SELECTED_CHECKPOINT_NAME = "checkpoint_selected.pt"
 SELECTED_REWARD_METADATA_NAME = "selected_reward_checkpoint.json"
 
 
@@ -130,6 +132,8 @@ def selected_paths(run_dir: str | Path) -> dict[str, Path]:
     return {
         "checkpoint_latest": run_dir / LATEST_CHECKPOINT_NAME,
         "checkpoint_min_reward": run_dir / MIN_REWARD_CHECKPOINT_NAME,
+        "checkpoint_max_reward": run_dir / MAX_REWARD_CHECKPOINT_NAME,
+        "checkpoint_selected": run_dir / SELECTED_CHECKPOINT_NAME,
         "selected_reward_checkpoint": run_dir / SELECTED_REWARD_METADATA_NAME,
     }
 

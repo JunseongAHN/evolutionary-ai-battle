@@ -62,7 +62,7 @@ class PPOConfig:
     hidden_dim: int = 64
     run_dir: str = "experiment/runs"
     selection_metric: str = "eval_mean_episode_reward"
-    selection_mode: str = "min"
+    selection_mode: str = "max"
     selection_eval_episodes: int = 2
 
 
@@ -242,6 +242,11 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     metrics_path = run_dir / "metrics.csv"
     paths = selected_paths(run_dir)
+    selected_checkpoint_path = (
+        paths["checkpoint_min_reward"]
+        if cfg.selection_mode == "min"
+        else paths["checkpoint_max_reward"]
+    )
     rows = []
     steps = 0
 
@@ -286,7 +291,9 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
             "selection_value": selection_value,
             "is_selected_checkpoint": False,
             "checkpoint_latest": str(paths["checkpoint_latest"]),
+            "checkpoint_selected": str(paths["checkpoint_selected"]),
             "checkpoint_min_reward": str(paths["checkpoint_min_reward"]),
+            "checkpoint_max_reward": str(paths["checkpoint_max_reward"]),
             **losses,
             **rollout["last_metrics"],
             **rollout["reward_components_mean"],
@@ -308,7 +315,7 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         is_selected, current_selected_value = save_selected_checkpoint_if_needed(
             run_dir=run_dir,
             latest_checkpoint=paths["checkpoint_latest"],
-            selected_checkpoint=paths["checkpoint_min_reward"],
+            selected_checkpoint=selected_checkpoint_path,
             metadata_path=paths["selected_reward_checkpoint"],
             update=row["update"],
             global_step=steps,
@@ -318,6 +325,8 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
             selection_value=selection_value,
         )
         row["is_selected_checkpoint"] = is_selected
+        if is_selected:
+            shutil.copy2(selected_checkpoint_path, paths["checkpoint_selected"])
         rows.append(row)
         _write_metrics(metrics_path, rows)
         if progress:
@@ -345,7 +354,9 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         "run_dir": str(run_dir),
         "checkpoint": str(checkpoint_path),
         "checkpoint_latest": str(paths["checkpoint_latest"]),
+        "checkpoint_selected": str(paths["checkpoint_selected"]),
         "checkpoint_min_reward": str(paths["checkpoint_min_reward"]),
+        "checkpoint_max_reward": str(paths["checkpoint_max_reward"]),
         "selected_reward_checkpoint": str(paths["selected_reward_checkpoint"]),
         "selection_metric": cfg.selection_metric,
         "selection_mode": cfg.selection_mode,
@@ -436,7 +447,9 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "selection_value",
         "is_selected_checkpoint",
         "checkpoint_latest",
+        "checkpoint_selected",
         "checkpoint_min_reward",
+        "checkpoint_max_reward",
         "policy_loss",
         "value_loss",
         "entropy",
