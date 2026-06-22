@@ -21,6 +21,18 @@ Train:
 python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --smoke
 ```
 
+Fast one-pass example:
+
+```powershell
+python experiment/train_ppo.py --config experiment/configs/ppo_example_tiny.yaml --smoke
+```
+
+Longer training config:
+
+```powershell
+python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --progress
+```
+
 Evaluate the selected checkpoint:
 
 ```powershell
@@ -34,3 +46,9 @@ python experiment/run_model_agents.py --checkpoint-a experiment/runs/<run>/check
 ```
 
 The current toy `training.cpc_env.CPCEnv` exposes one controllable self agent. The runner therefore fails clearly for two-agent control until a multi-agent env with action mappings is available. Model loading and action production remain outside the environment.
+
+## Combat-Forcing Toy Reward
+
+The toy CPC training environment intentionally reduces the per-step survival reward to avoid no-op survival reward hacking. Center pressure now shrinks a safe zone over time, and the scripted enemy moves or fires weakly to force engagement instead of allowing the learner to idle.
+
+Reward components are logged separately in `info["reward_components"]` and in `metrics.csv` with `reward_` prefixes, including damage, death/win, survival, enemy approach, aim alignment, attack intent, and zone pressure. These rewards are only PPO training signals; they are not the final CPC evaluation metric.

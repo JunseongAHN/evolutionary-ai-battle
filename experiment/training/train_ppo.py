@@ -36,11 +36,11 @@ except ModuleNotFoundError:
 if __package__:
     from .cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
     from .ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
-    from .torchrl_env import TorchRLCPCEnv
+    from .torchrl_env import REWARD_COMPONENT_KEYS, TorchRLCPCEnv
 else:
     from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
     from ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
-    from torchrl_env import TorchRLCPCEnv
+    from torchrl_env import REWARD_COMPONENT_KEYS, TorchRLCPCEnv
 
 
 @dataclass
@@ -98,6 +98,7 @@ def collect_rollout(env: TorchRLCPCEnv, policy: MultiDiscreteActorCritic, cfg: P
     current_return = 0.0
     current_length = 0
     last_metrics: dict[str, float] = {}
+    reward_component_sums = {f"reward_{key}": 0.0 for key in REWARD_COMPONENT_KEYS}
 
     for _ in range(cfg.rollout_steps):
         features = flatten_observation(obs_td).squeeze(0)
@@ -125,6 +126,8 @@ def collect_rollout(env: TorchRLCPCEnv, policy: MultiDiscreteActorCritic, cfg: P
         current_return += reward
         current_length += 1
         last_metrics = _metrics_from_td(next_td)
+        for key, value in _reward_components_from_td(next_td).items():
+            reward_component_sums[key] += value
 
         if done:
             episode_returns.append(current_return)
@@ -153,6 +156,10 @@ def collect_rollout(env: TorchRLCPCEnv, policy: MultiDiscreteActorCritic, cfg: P
         "episode_returns": episode_returns,
         "episode_lengths": episode_lengths,
         "last_metrics": last_metrics,
+        "reward_components_mean": {
+            key: value / max(1, cfg.rollout_steps)
+            for key, value in reward_component_sums.items()
+        },
     }
 
 
@@ -282,6 +289,7 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
             "checkpoint_min_reward": str(paths["checkpoint_min_reward"]),
             **losses,
             **rollout["last_metrics"],
+            **rollout["reward_components_mean"],
         }
         save_checkpoint(
             paths["checkpoint_latest"],
@@ -405,6 +413,16 @@ def _metrics_from_td(td) -> dict[str, float]:
     return metrics
 
 
+def _reward_components_from_td(td) -> dict[str, float]:
+    components = {}
+    for key in REWARD_COMPONENT_KEYS:
+        try:
+            components[f"reward_{key}"] = float(td["reward_components", key].reshape(-1)[0].item())
+        except Exception:
+            components[f"reward_{key}"] = 0.0
+    return components
+
+
 def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -428,6 +446,7 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "isolation_rate",
         "damage_dealt",
         "damage_taken",
+        *[f"reward_{key}" for key in REWARD_COMPONENT_KEYS],
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

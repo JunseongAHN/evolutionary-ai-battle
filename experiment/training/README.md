@@ -115,6 +115,12 @@ python experiment/run_model_agents.py --checkpoint-a experiment/runs/<run>/check
 
 The current toy `CPCEnv` supports one controllable self agent. Two-agent model use is blocked in the runner with a clear error until a multi-agent Python env is available. The environment remains model-agnostic.
 
+## Combat-Forcing Toy Reward
+
+The toy CPC env now uses a much smaller survival reward so standing still no longer looks artificially strong. It also spawns the enemy near fire range, applies shrinking center safe-zone pressure, and gives the scripted enemy weak pressure behavior.
+
+Reward components are exposed separately through `info["reward_components"]` and logged into `metrics.csv` with `reward_` prefixes. These reward components are PPO training signals, not the final CPC metric report.
+
 PR3 uses a manual PyTorch PPO loss while still training through `TorchRLCPCEnv`. This is intentional: the acceptance target is smoke validation of rollouts, multi-discrete log-probs, PPO shapes, metrics, and checkpointing. A future PR can replace the manual loop with TorchRL collectors/loss modules after the adapter surface is stable.
 
 ## PR3 Acceptance Check

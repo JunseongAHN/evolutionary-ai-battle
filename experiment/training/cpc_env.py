@@ -24,6 +24,13 @@ class CPCEnv:
     fire_range = 260.0
     fire_alignment = 0.65
     damage = 10.0
+    enemy_damage = 2.0
+    enemy_move_speed = 18.0
+    survival_reward = 0.001
+    center = {"x": 500.0, "y": 500.0}
+    safe_radius_start = 420.0
+    safe_radius_end = 120.0
+    zone_pressure_penalty = 0.08
 
     def __init__(self, seed: int = 0, max_steps: int = 50):
         self.seed = seed
@@ -42,13 +49,14 @@ class CPCEnv:
         self.step_count = 0
         self.metrics = CpcMetrics()
         self.trajectory = []
+        spawn = self._spawn_positions()
         self.state = {
             "self_hp": self.max_hp,
             "ally_hp": self.max_hp,
             "enemy_hp": self.max_hp,
-            "self_pos": {"x": 260.0, "y": 500.0},
-            "ally_pos": {"x": 380.0, "y": 560.0},
-            "enemy_pos": {"x": 650.0, "y": 540.0},
+            "self_pos": spawn["self_pos"],
+            "ally_pos": spawn["ally_pos"],
+            "enemy_pos": spawn["enemy_pos"],
         }
         return self.observation()
 
@@ -60,24 +68,30 @@ class CPCEnv:
         }
         decoded = decode_action(raw_action)
         previous_ally_distance = self._distance(self.state["self_pos"], self.state["ally_pos"])
+        previous_enemy_distance = self._distance(self.state["self_pos"], self.state["enemy_pos"])
         previous_enemy_hp = float(self.state["enemy_hp"])
         previous_self_hp = float(self.state["self_hp"])
 
         self._move_self(decoded["moveX"], decoded["moveY"])
         ally_under_pressure = self._ally_under_pressure()
+        self._script_enemy_pressure()
 
         damage_dealt = self._resolve_fire(decoded)
         damage_taken = self._resolve_enemy_pressure()
         self.step_count += 1
 
         ally_distance = self._distance(self.state["self_pos"], self.state["ally_pos"])
+        enemy_distance = self._distance(self.state["self_pos"], self.state["enemy_pos"])
         moved_toward_ally = ally_distance < previous_ally_distance
         reward_components = self._reward_components(
-            ally_distance=ally_distance,
+            decoded=decoded,
+            previous_enemy_distance=previous_enemy_distance,
+            enemy_distance=enemy_distance,
             ally_under_pressure=ally_under_pressure,
-            moved_toward_ally=moved_toward_ally,
             damage_dealt=damage_dealt,
             damage_taken=damage_taken,
+            previous_enemy_hp=previous_enemy_hp,
+            previous_self_hp=previous_self_hp,
         )
         reward = sum(reward_components.values())
         done = self._done()
@@ -99,6 +113,11 @@ class CPCEnv:
                 "enemy_hp": previous_enemy_hp - float(self.state["enemy_hp"]),
                 "self_hp": previous_self_hp - float(self.state["self_hp"]),
             },
+            "safe_zone": {
+                "center": dict(self.center),
+                "radius": self._safe_radius(),
+                "distance": self._distance(self.state["self_pos"], self.center),
+            },
         }
         self.trajectory.append(self._trajectory_step(raw_action, decoded, obs, reward, done, info))
         return obs, reward, done, info
@@ -116,6 +135,8 @@ class CPCEnv:
             "ally_under_pressure": self._ally_under_pressure(),
             "self_low_hp": float(self.state["self_hp"]) <= 35.0,
             "step_count": self.step_count,
+            "safe_radius": self._safe_radius(),
+            "distance_to_enemy": self._distance(self.state["self_pos"], self.state["enemy_pos"]),
         }
 
     def sample_action(self) -> RawAction:
@@ -135,6 +156,23 @@ class CPCEnv:
         pos = self.state["self_pos"]
         pos["x"] = self._clamp(pos["x"] + move_x * self.move_speed, 0.0, self.width)
         pos["y"] = self._clamp(pos["y"] + move_y * self.move_speed, 0.0, self.height)
+
+    def _script_enemy_pressure(self) -> None:
+        if float(self.state["enemy_hp"]) <= 0.0:
+            return
+        enemy = self.state["enemy_pos"]
+        target = self.state["self_pos"]
+        distance_to_self = self._distance(enemy, target)
+        if distance_to_self <= self.fire_range * 0.9:
+            return
+
+        center_distance = self._distance(enemy, self.center)
+        target_pos = self.center if center_distance > self._safe_radius() else target
+        dx = target_pos["x"] - enemy["x"]
+        dy = target_pos["y"] - enemy["y"]
+        length = max(math.hypot(dx, dy), 1e-6)
+        enemy["x"] = self._clamp(enemy["x"] + (dx / length) * self.enemy_move_speed, 0.0, self.width)
+        enemy["y"] = self._clamp(enemy["y"] + (dy / length) * self.enemy_move_speed, 0.0, self.height)
 
     def _resolve_fire(self, decoded: dict[str, float]) -> float:
         if int(decoded["fire"]) != 1:
@@ -161,27 +199,63 @@ class CPCEnv:
         if self._distance(self.state["enemy_pos"], self.state["ally_pos"]) <= self.fire_range:
             self.state["ally_hp"] = max(0.0, float(self.state["ally_hp"]) - 2.0)
         if self._distance(self.state["enemy_pos"], self.state["self_pos"]) <= self.fire_range:
-            damage_taken = 3.0
+            damage_taken = self.enemy_damage
             self.state["self_hp"] = max(0.0, float(self.state["self_hp"]) - damage_taken)
         return damage_taken
 
     def _reward_components(
         self,
         *,
-        ally_distance: float,
+        decoded: dict[str, float],
+        previous_enemy_distance: float,
+        enemy_distance: float,
         ally_under_pressure: bool,
-        moved_toward_ally: bool,
         damage_dealt: float,
         damage_taken: float,
+        previous_enemy_hp: float,
+        previous_self_hp: float,
     ) -> dict[str, float]:
+        del ally_under_pressure
+        alignment = self._aim_alignment(decoded)
+        in_range = enemy_distance <= self.fire_range
+        outside_safe = self._distance(self.state["self_pos"], self.center) > self._safe_radius()
+        self_dead = previous_self_hp > 0.0 and float(self.state["self_hp"]) <= 0.0
+        enemy_dead = previous_enemy_hp > 0.0 and float(self.state["enemy_hp"]) <= 0.0
         return {
-            "survival": 0.02 if float(self.state["self_hp"]) > 0.0 else -1.0,
-            "ally_support": 0.05 if ally_under_pressure and moved_toward_ally else 0.0,
-            "damage": damage_dealt * 0.05,
-            "pressure_response": 0.05 if ally_under_pressure and damage_dealt > 0.0 else 0.0,
-            "isolation": -0.03 if ally_distance > self.metrics.isolation_threshold else 0.0,
-            "self_preservation": 0.03 if bool(self.observation()["self_low_hp"]) and damage_taken <= 0.0 else 0.0,
-            "damage_taken": -damage_taken * 0.03,
+            "damage_dealt": damage_dealt * 0.10,
+            "damage_taken": -damage_taken * 0.05,
+            "death": -1.0 if self_dead else 0.0,
+            "win": 2.0 if enemy_dead else 0.0,
+            "survival": self.survival_reward if float(self.state["self_hp"]) > 0.0 else 0.0,
+            "approach_enemy": 0.03 if enemy_distance < previous_enemy_distance else -0.02,
+            "aim_alignment": max(0.0, alignment) * 0.02 if in_range else 0.0,
+            "attack_intent": 0.05 if int(decoded["fire"]) == 1 and in_range and alignment >= self.fire_alignment else 0.0,
+            "zone_pressure": -self.zone_pressure_penalty if outside_safe else 0.0,
+        }
+
+    def _aim_alignment(self, decoded: dict[str, float]) -> float:
+        to_enemy_x = self.state["enemy_pos"]["x"] - self.state["self_pos"]["x"]
+        to_enemy_y = self.state["enemy_pos"]["y"] - self.state["self_pos"]["y"]
+        length = max(math.hypot(to_enemy_x, to_enemy_y), 1e-6)
+        return (decoded["aimX"] * to_enemy_x / length) + (decoded["aimY"] * to_enemy_y / length)
+
+    def _safe_radius(self) -> float:
+        progress = min(1.0, self.step_count / max(1, self.max_steps - 1))
+        return self.safe_radius_start + (self.safe_radius_end - self.safe_radius_start) * progress
+
+    def _spawn_positions(self) -> dict[str, Vec2]:
+        angle = self.rng.uniform(-0.35, 0.35)
+        distance = self.rng.uniform(0.8 * self.fire_range, 1.2 * self.fire_range)
+        self_pos = {"x": 430.0, "y": 500.0}
+        enemy_pos = {
+            "x": self._clamp(self_pos["x"] + math.cos(angle) * distance, 0.0, self.width),
+            "y": self._clamp(self_pos["y"] + math.sin(angle) * distance, 0.0, self.height),
+        }
+        ally_pos = {"x": self_pos["x"] - 60.0, "y": self_pos["y"] + 45.0}
+        return {
+            "self_pos": self_pos,
+            "ally_pos": ally_pos,
+            "enemy_pos": enemy_pos,
         }
 
     def _trajectory_step(

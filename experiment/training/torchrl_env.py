@@ -18,13 +18,15 @@ else:
 
 
 REWARD_COMPONENT_KEYS = (
-    "survival",
-    "ally_support",
-    "damage",
-    "pressure_response",
-    "isolation",
-    "self_preservation",
+    "damage_dealt",
     "damage_taken",
+    "death",
+    "win",
+    "survival",
+    "approach_enemy",
+    "aim_alignment",
+    "attack_intent",
+    "zone_pressure",
 )
 
 METRIC_KEYS = (
