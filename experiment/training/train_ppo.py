@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import random
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,11 +12,33 @@ from typing import Any
 
 import torch
 
+try:
+    from experiment.checkpointing import (
+        save_checkpoint,
+        save_selected_checkpoint_if_needed,
+        selected_paths,
+    )
+except ModuleNotFoundError:
+    import sys
+
+    EXPERIMENT_ROOT = Path(__file__).resolve().parents[1]
+    REPO_ROOT = EXPERIMENT_ROOT.parent
+    for path in (EXPERIMENT_ROOT, REPO_ROOT):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+    from experiment.checkpointing import (
+        save_checkpoint,
+        save_selected_checkpoint_if_needed,
+        selected_paths,
+    )
+
 if __package__:
-    from .ppo_policy import MultiDiscreteActorCritic, flatten_observation
+    from .cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
+    from .ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
     from .torchrl_env import TorchRLCPCEnv
 else:
-    from ppo_policy import MultiDiscreteActorCritic, flatten_observation
+    from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
+    from ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
     from torchrl_env import TorchRLCPCEnv
 
 
@@ -37,6 +60,9 @@ class PPOConfig:
     max_episode_steps: int = 50
     hidden_dim: int = 64
     run_dir: str = "experiment/runs"
+    selection_metric: str = "eval_mean_episode_reward"
+    selection_mode: str = "min"
+    selection_eval_episodes: int = 2
 
 
 def load_config(path: str | Path | None, *, smoke: bool = False) -> PPOConfig:
@@ -52,6 +78,7 @@ def load_config(path: str | Path | None, *, smoke: bool = False) -> PPOConfig:
         cfg.rollout_steps = min(cfg.rollout_steps, 64)
         cfg.num_epochs = min(cfg.num_epochs, 2)
         cfg.minibatch_size = min(cfg.minibatch_size, 32)
+        cfg.selection_eval_episodes = min(cfg.selection_eval_episodes, 2)
     return cfg
 
 
@@ -206,6 +233,7 @@ def train_ppo(cfg: PPOConfig) -> dict[str, Any]:
     policy = MultiDiscreteActorCritic(hidden_dim=cfg.hidden_dim).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     metrics_path = run_dir / "metrics.csv"
+    paths = selected_paths(run_dir)
     rows = []
     steps = 0
 
@@ -221,35 +249,122 @@ def train_ppo(cfg: PPOConfig) -> dict[str, Any]:
             cfg.gae_lambda,
         )
         losses = ppo_update(policy, optimizer, rollout, advantages, returns, cfg)
+        eval_mean_episode_reward = None
+        if cfg.selection_metric == "eval_mean_episode_reward":
+            eval_mean_episode_reward = evaluate_policy_mean_return(
+                policy,
+                cfg,
+                episodes=cfg.selection_eval_episodes,
+                device=device,
+                seed_offset=len(rows) * max(1, cfg.selection_eval_episodes),
+            )
+        elif cfg.selection_metric != "episodic_return_mean":
+            raise ValueError(
+                "selection_metric must be 'eval_mean_episode_reward' or 'episodic_return_mean', "
+                f"got {cfg.selection_metric!r}"
+            )
+        selection_value = (
+            eval_mean_episode_reward
+            if cfg.selection_metric == "eval_mean_episode_reward"
+            else _mean(rollout["episode_returns"])
+        )
         row = {
             "update": len(rows) + 1,
             "step": steps,
             "episodic_return_mean": _mean(rollout["episode_returns"]),
             "episode_length_mean": _mean(rollout["episode_lengths"]),
+            "eval_mean_episode_reward": eval_mean_episode_reward,
+            "selection_metric": cfg.selection_metric,
+            "selection_value": selection_value,
+            "is_selected_checkpoint": False,
+            "checkpoint_latest": str(paths["checkpoint_latest"]),
+            "checkpoint_min_reward": str(paths["checkpoint_min_reward"]),
             **losses,
             **rollout["last_metrics"],
         }
+        save_checkpoint(
+            paths["checkpoint_latest"],
+            policy=policy,
+            optimizer=optimizer,
+            config={**asdict(cfg), "resolved_device": str(device)},
+            update=row["update"],
+            global_step=steps,
+            metrics=row,
+            selection_metric=cfg.selection_metric,
+            selection_mode=cfg.selection_mode,
+            selection_value=selection_value,
+            action_metadata=_action_metadata(),
+            observation_metadata=_observation_metadata(),
+        )
+        is_selected, current_selected_value = save_selected_checkpoint_if_needed(
+            run_dir=run_dir,
+            latest_checkpoint=paths["checkpoint_latest"],
+            selected_checkpoint=paths["checkpoint_min_reward"],
+            metadata_path=paths["selected_reward_checkpoint"],
+            update=row["update"],
+            global_step=steps,
+            metrics=row,
+            selection_metric=cfg.selection_metric,
+            selection_mode=cfg.selection_mode,
+            selection_value=selection_value,
+        )
+        row["is_selected_checkpoint"] = is_selected
         rows.append(row)
         _write_metrics(metrics_path, rows)
 
     checkpoint_path = run_dir / "checkpoint.pt"
-    torch.save(
-        {
-            "policy_state_dict": policy.state_dict(),
-            "config": {**asdict(cfg), "resolved_device": str(device)},
-            "obs_dim": policy.encoder[0].in_features,
-            "hidden_dim": cfg.hidden_dim,
-        },
-        checkpoint_path,
-    )
+    shutil.copy2(paths["checkpoint_latest"], checkpoint_path)
     (run_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
+    selected_metadata = _read_json_if_exists(paths["selected_reward_checkpoint"])
     return {
         "run_dir": str(run_dir),
         "checkpoint": str(checkpoint_path),
+        "checkpoint_latest": str(paths["checkpoint_latest"]),
+        "checkpoint_min_reward": str(paths["checkpoint_min_reward"]),
+        "selected_reward_checkpoint": str(paths["selected_reward_checkpoint"]),
+        "selection_metric": cfg.selection_metric,
+        "selection_mode": cfg.selection_mode,
+        "selection_value": selected_metadata.get("selection_value"),
         "metrics_csv": str(metrics_path),
         "device": str(device),
         "last_metrics": rows[-1] if rows else {},
     }
+
+
+@torch.no_grad()
+def evaluate_policy_mean_return(
+    policy: MultiDiscreteActorCritic,
+    cfg: PPOConfig,
+    *,
+    episodes: int,
+    device: torch.device,
+    seed_offset: int = 0,
+) -> float:
+    returns = []
+    was_training = policy.training
+    policy.eval()
+    for episode in range(max(1, int(episodes))):
+        env = TorchRLCPCEnv(
+            seed=int(cfg.seed) + seed_offset + episode,
+            max_steps=int(cfg.max_episode_steps),
+            device=device,
+        )
+        obs = env.reset()
+        done = False
+        episode_return = 0.0
+        while not done:
+            move_logits, aim_logits, fire_logits, _ = policy(obs)
+            step_td = obs.clone()
+            step_td["move"] = move_logits.argmax(dim=-1).squeeze()
+            step_td["aim"] = aim_logits.argmax(dim=-1).squeeze()
+            step_td["fire"] = fire_logits.argmax(dim=-1).squeeze()
+            obs = env.step(step_td)["next"]
+            episode_return += float(obs["reward"].reshape(-1)[0].item())
+            done = bool(obs["done"].reshape(-1)[0].item())
+        returns.append(episode_return)
+    if was_training:
+        policy.train()
+    return _mean(returns)
 
 
 def resolve_device(device: str) -> torch.device:
@@ -279,6 +394,12 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "step",
         "episodic_return_mean",
         "episode_length_mean",
+        "eval_mean_episode_reward",
+        "selection_metric",
+        "selection_value",
+        "is_selected_checkpoint",
+        "checkpoint_latest",
+        "checkpoint_min_reward",
         "policy_loss",
         "value_loss",
         "entropy",
@@ -330,6 +451,27 @@ def _coerce_value(value: str, current: Any) -> Any:
     if isinstance(current, float):
         return float(value)
     return value
+
+
+def _action_metadata() -> dict[str, int]:
+    return {
+        "move_bins": MOVE_BINS,
+        "aim_bins": AIM_BINS,
+        "fire_bins": FIRE_BINS,
+    }
+
+
+def _observation_metadata() -> dict[str, Any]:
+    return {
+        "observation_keys": list(OBS_KEYS),
+        "obs_dim": OBS_DIM,
+    }
+
+
+def _read_json_if_exists(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def main() -> None:

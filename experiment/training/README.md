@@ -79,6 +79,9 @@ python experiment/training/train_ppo.py --config experiment/configs/ppo_smoke.ya
 
 This writes a run directory under `experiment/runs/ppo_smoke_<timestamp>/` with:
 
+- `checkpoint_latest.pt`
+- `checkpoint_min_reward.pt`
+- `selected_reward_checkpoint.json`
 - `checkpoint.pt`
 - `metrics.csv`
 - `config.json`
@@ -89,7 +92,56 @@ Evaluate:
 python experiment/training/eval_ppo.py --checkpoint experiment/runs/<run>/checkpoint.pt
 ```
 
+## Reward-selected Checkpoint
+
+Training also writes a reward-selected checkpoint. By default the config uses:
+
+- `selection_metric: eval_mean_episode_reward`
+- `selection_mode: min`
+
+The selected files are:
+
+- `checkpoint_latest.pt`: most recent update
+- `checkpoint_min_reward.pt`: selected low-reward checkpoint
+- `selected_reward_checkpoint.json`: selected update, global step, metric, mode, and value
+
+The min-reward checkpoint is useful for inspecting failure behavior in GUI/debug eval. It is not called the best policy because the selection depends on the configured metric and mode.
+
+```powershell
+python experiment/train_ppo.py --config experiment/configs/ppo_smoke.yaml --smoke
+python experiment/eval_ppo.py --checkpoint experiment/runs/<run>/checkpoint_min_reward.pt --episodes 10 --device cpu --deterministic
+python experiment/run_model_agents.py --checkpoint-a experiment/runs/<run>/checkpoint_min_reward.pt --checkpoint-b experiment/runs/<run>/checkpoint_min_reward.pt --episodes 1 --device cpu --deterministic --export experiment/runs/<run>/two_agent_min_reward_eval.json
+```
+
+The current toy `CPCEnv` supports one controllable self agent. Two-agent model use is blocked in the runner with a clear error until a multi-agent Python env is available. The environment remains model-agnostic.
+
 PR3 uses a manual PyTorch PPO loss while still training through `TorchRLCPCEnv`. This is intentional: the acceptance target is smoke validation of rollouts, multi-discrete log-probs, PPO shapes, metrics, and checkpointing. A future PR can replace the manual loop with TorchRL collectors/loss modules after the adapter surface is stable.
+
+## PR3 Acceptance Check
+
+Run:
+
+```powershell
+python experiment/check_pr3_acceptance.py --config experiment/configs/ppo_smoke.yaml --seed 123 --eval-episodes 10 --device cpu
+```
+
+Optional CUDA run:
+
+```powershell
+python experiment/check_pr3_acceptance.py --config experiment/configs/ppo_smoke.yaml --seed 123 --eval-episodes 10 --device cuda
+```
+
+The CPU run is the merge gate. CUDA can have small floating-point variation, so the acceptance script does not judge policy quality or require strong returns.
+
+The check verifies:
+
+- same-seed CPU reproducibility for first sampled action and rollout action sequence
+- forced `move != 0` plus `fire = 1` action
+- raw and decoded action visibility
+- decoded action bounds
+- checkpoint load into a fresh model
+- `metrics.csv` columns and multiple rows
+- 10-episode eval robustness
 
 ## Design Constraint
 
