@@ -54,6 +54,10 @@ class PythonBattleCoreEnv:
     fire_range = 260.0
     damage = 10.0
     fire_cooldown_steps = 5
+    safe_zone_center = {"x": 500.0, "y": 500.0}
+    safe_radius_start = 720.0
+    safe_radius_end = 180.0
+    zone_damage_per_step = 2.0
 
     def __init__(self):
         self.agent_ids: list[AgentId] = list(DEFAULT_AGENT_IDS)
@@ -176,6 +180,7 @@ class PythonBattleCoreEnv:
         for agent_id in self.agent_ids:
             combat_events.extend(self._resolve_fire(agent_id, actions))
         events.extend(combat_events)
+        events.extend(self._apply_zone_damage())
         self.recent_events = (self.recent_events + events)[-8:]
         observations = self._observations()
         terminated = self._one_team_remaining()
@@ -315,6 +320,49 @@ class PythonBattleCoreEnv:
             )
         return events
 
+    def _apply_zone_damage(self) -> list[BattleEvent]:
+        if self.zone_damage_per_step <= 0.0:
+            return []
+
+        events: list[BattleEvent] = []
+        radius = self._safe_radius()
+        center = {"position": self.safe_zone_center}
+        for agent in self.agents.values():
+            if not agent["alive"] or _distance(agent, center) <= radius:
+                continue
+
+            damage = min(self.zone_damage_per_step, agent["hp"])
+            agent["hp"] = max(0.0, agent["hp"] - damage)
+            agent_id = agent["agent_id"]
+            self.last_damage_taken[agent_id] = self.last_damage_taken.get(agent_id, 0.0) + damage
+            events.append(
+                self._event(
+                    "damage",
+                    "environment",
+                    target_id=agent_id,
+                    value=damage,
+                    position=deepcopy(agent["position"]),
+                    metadata={"source": "safe_zone", "safe_radius": radius},
+                )
+            )
+            if agent["hp"] <= 0.0 and agent["alive"]:
+                agent["alive"] = False
+                events.append(
+                    self._event(
+                        "death",
+                        "environment",
+                        target_id=agent_id,
+                        team_id=agent["team_id"],
+                        position=deepcopy(agent["position"]),
+                        metadata={"source": "safe_zone"},
+                    )
+                )
+        return events
+
+    def _safe_radius(self) -> float:
+        progress = _clamp(self.step_index / max(float(self.max_steps), 1.0), 0.0, 1.0)
+        return self.safe_radius_start + ((self.safe_radius_end - self.safe_radius_start) * progress)
+
     def _nearest_alive_enemy_in_range(self, agent_id: AgentId) -> dict | None:
         agent = self.agents[agent_id]
         enemies = [
@@ -413,6 +461,11 @@ class PythonBattleCoreEnv:
             "team_ids": list(self.team_ids),
             "agent_team_map": dict(self.agent_team_map),
             "map": {"width": self.width, "height": self.height, "obstacles": []},
+            "safe_zone": {
+                "center": dict(self.safe_zone_center),
+                "radius": self._safe_radius(),
+                "damage_per_step": self.zone_damage_per_step,
+            },
             "agents": deepcopy(self.agents),
             "events": events,
         }

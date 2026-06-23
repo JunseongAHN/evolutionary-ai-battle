@@ -24,9 +24,17 @@ OBS_KEYS = (
     "ally_under_pressure",
     "self_low_hp",
     "step_count",
+    "target_dir",
+    "aim_alignment",
+    "can_fire",
+    "weapon_cooldown_fraction",
+    "distance_to_center",
+    "safe_radius",
+    "safe_margin_fraction",
+    "outside_safe_zone",
 )
 
-OBS_DIM = 13
+OBS_DIM = 22
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,14 @@ def flatten_observation(obs: Mapping[str, torch.Tensor]) -> torch.Tensor:
         _as_float_feature(obs["ally_under_pressure"]),
         _as_float_feature(obs["self_low_hp"]),
         _as_float_feature(obs["step_count"]) / 100.0,
+        _as_float_feature(obs["target_dir"]),
+        _as_float_feature(obs["aim_alignment"]),
+        _as_float_feature(obs["can_fire"]),
+        _as_float_feature(obs["weapon_cooldown_fraction"]),
+        _as_float_feature(obs["distance_to_center"]) / 1000.0,
+        _as_float_feature(obs["safe_radius"]) / 1000.0,
+        _as_float_feature(obs["safe_margin_fraction"]),
+        _as_float_feature(obs["outside_safe_zone"]),
     ]
     return torch.cat(parts, dim=-1)
 

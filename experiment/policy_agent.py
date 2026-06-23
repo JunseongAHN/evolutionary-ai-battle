@@ -19,13 +19,13 @@ except ModuleNotFoundError:
 
 try:
     from experiment.training.cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS, decode_action, random_action
-    from experiment.training.ppo_policy import MultiDiscreteActorCritic
+    from experiment.training.ppo_policy import OBS_DIM, MultiDiscreteActorCritic
 except ModuleNotFoundError:
     EXPERIMENT_ROOT = Path(__file__).resolve().parent
     if str(EXPERIMENT_ROOT) not in sys.path:
         sys.path.insert(0, str(EXPERIMENT_ROOT))
     from training.cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS, decode_action, random_action
-    from training.ppo_policy import MultiDiscreteActorCritic
+    from training.ppo_policy import OBS_DIM, MultiDiscreteActorCritic
 
 
 class BaseAgent:
@@ -64,7 +64,15 @@ class PPOPolicyAgent(BaseAgent):
         cfg = checkpoint.get("config", {})
         hidden_dim = int(checkpoint.get("hidden_dim", cfg.get("hidden_dim", 64)))
         policy = MultiDiscreteActorCritic(hidden_dim=hidden_dim)
-        policy.load_state_dict(checkpoint["policy_state_dict"])
+        try:
+            policy.load_state_dict(checkpoint["policy_state_dict"])
+        except RuntimeError as exc:
+            metadata = checkpoint.get("observation_metadata", {})
+            checkpoint_obs_dim = metadata.get("obs_dim", checkpoint.get("obs_dim", "unknown"))
+            raise RuntimeError(
+                f"Checkpoint observation dimension mismatch: checkpoint obs_dim={checkpoint_obs_dim}, "
+                f"current obs_dim={OBS_DIM}. Retrain the PPO checkpoint with the current observation schema."
+            ) from exc
         return cls(policy, device=device, checkpoint=checkpoint, checkpoint_path=checkpoint_path)
 
     @torch.no_grad()
@@ -91,6 +99,7 @@ class PPOPolicyAgent(BaseAgent):
     def act_with_debug(self, observation: Mapping[str, Any], deterministic: bool = True) -> dict[str, Any]:
         model_input = observation_to_model_input(observation, self.device)
         move_logits, aim_logits, fire_logits, value = self.policy(model_input)
+        log_prob = None
         if deterministic:
             action = {
                 "move": int(move_logits.argmax(dim=-1).reshape(-1)[0].item()),
@@ -104,16 +113,18 @@ class PPOPolicyAgent(BaseAgent):
                 "aim": int(output.action["aim"].reshape(-1)[0].item()),
                 "fire": int(output.action["fire"].reshape(-1)[0].item()),
             }
+            log_prob = float(output.log_prob.detach().to("cpu").reshape(-1)[0].item())
         _validate_action(action)
         return {
             "raw_action": action,
             "decoded_action": _snake_decoded_action(decode_action(action)),
-            "logits": {
-                "move": move_logits.detach().to("cpu").reshape(-1).tolist(),
-                "aim": aim_logits.detach().to("cpu").reshape(-1).tolist(),
-                "fire": fire_logits.detach().to("cpu").reshape(-1).tolist(),
+            "policy_debug": {
+                "log_prob": log_prob,
+                "value": float(value.detach().to("cpu").reshape(-1)[0].item()),
+                "move_logits": move_logits.detach().to("cpu").reshape(-1).tolist(),
+                "aim_logits": aim_logits.detach().to("cpu").reshape(-1).tolist(),
+                "fire_logits": fire_logits.detach().to("cpu").reshape(-1).tolist(),
             },
-            "value": float(value.detach().to("cpu").reshape(-1)[0].item()),
         }
 
 
@@ -129,6 +140,18 @@ def observation_to_model_input(observation: Mapping[str, Any], device: torch.dev
         "ally_under_pressure": _bool_1(observation["ally_under_pressure"], device),
         "self_low_hp": _bool_1(observation["self_low_hp"], device),
         "step_count": torch.tensor([int(observation["step_count"])], dtype=torch.int64, device=device),
+        "target_dir": torch.tensor(
+            [float(observation.get("target_dir_x", 0.0)), float(observation.get("target_dir_y", 0.0))],
+            dtype=torch.float32,
+            device=device,
+        ),
+        "aim_alignment": _float_1(observation.get("aim_alignment", 0.0), device),
+        "can_fire": _bool_1(observation.get("can_fire", False), device),
+        "weapon_cooldown_fraction": _float_1(observation.get("weapon_cooldown_fraction", 0.0), device),
+        "distance_to_center": _float_1(observation.get("distance_to_center", 0.0), device),
+        "safe_radius": _float_1(observation.get("safe_radius", 1.0), device),
+        "safe_margin_fraction": _float_1(observation.get("safe_margin_fraction", 0.0), device),
+        "outside_safe_zone": _bool_1(observation.get("outside_safe_zone", False), device),
     }
 
 

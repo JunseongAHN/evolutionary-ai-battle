@@ -131,13 +131,13 @@ def test_env_does_not_import_policy_agent():
     assert all(token not in source for token in forbidden)
 
 
-def test_two_agent_runner_loads_same_checkpoint_for_two_agents(tmp_path):
+def test_two_agent_runner_fails_clearly_when_second_checkpoint_requested(tmp_path):
     result = train_ppo(tiny_cfg(tmp_path))
 
-    with pytest.raises(NotImplementedError, match="one controllable self agent"):
+    with pytest.raises(NotImplementedError, match="Two-agent model gameplay requested"):
         run_two_agent_eval(
             checkpoint_a=result["checkpoint_selected"],
-            checkpoint_b=None,
+            checkpoint_b=result["checkpoint_selected"],
             episodes=1,
             device="cpu",
             deterministic=True,

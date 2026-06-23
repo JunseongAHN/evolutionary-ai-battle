@@ -19,14 +19,24 @@ else:
 
 REWARD_COMPONENT_KEYS = (
     "damage_dealt",
+    "bullet_hit",
     "damage_taken",
     "death",
     "win",
     "survival",
     "approach_enemy",
     "aim_alignment",
+    "bad_aim",
     "attack_intent",
+    "aligned_shot",
+    "off_target_shot",
     "zone_pressure",
+    "return_to_zone",
+    "move_deeper_outside_zone",
+    "near_edge_outward",
+    "shot_fired",
+    "wasted_fire",
+    "missed_shot",
 )
 
 METRIC_KEYS = (
@@ -35,6 +45,11 @@ METRIC_KEYS = (
     "teammate_under_pressure_response",
     "damage_dealt",
     "damage_taken",
+    "mean_aim_alignment",
+    "off_target_shot_count",
+    "bullet_hit_count",
+    "outside_safe_zone_rate",
+    "near_edge_outward_count",
 )
 
 
@@ -54,10 +69,15 @@ class TorchRLCPCEnv(EnvBase):
         max_steps: int = 50,
         device: torch.device | str = "cpu",
         env: CPCEnv | None = None,
+        randomize_enemy_spawn_direction: bool = False,
     ):
         self.seed = int(seed)
         self.rng = random.Random(self.seed)
-        self.cpc_env = env or CPCEnv(seed=self.seed, max_steps=max_steps)
+        self.cpc_env = env or CPCEnv(
+            seed=self.seed,
+            max_steps=max_steps,
+            randomize_enemy_spawn_direction=randomize_enemy_spawn_direction,
+        )
         device = torch.device(device)
         super().__init__(device=device, batch_size=torch.Size([]))
 
@@ -118,6 +138,15 @@ class TorchRLCPCEnv(EnvBase):
             ally_under_pressure=unbounded_spec(shape=(1,), dtype=torch.bool, device=self.device),
             self_low_hp=unbounded_spec(shape=(1,), dtype=torch.bool, device=self.device),
             step_count=unbounded_spec(shape=(1,), dtype=torch.int64, device=self.device),
+            safe_radius=unbounded_spec(shape=(1,), dtype=torch.float32, device=self.device),
+            distance_to_enemy=unbounded_spec(shape=(1,), dtype=torch.float32, device=self.device),
+            can_fire=unbounded_spec(shape=(1,), dtype=torch.bool, device=self.device),
+            weapon_cooldown_fraction=unbounded_spec(shape=(1,), dtype=torch.float32, device=self.device),
+            target_dir=unbounded_spec(shape=(2,), dtype=torch.float32, device=self.device),
+            aim_alignment=unbounded_spec(shape=(1,), dtype=torch.float32, device=self.device),
+            distance_to_center=unbounded_spec(shape=(1,), dtype=torch.float32, device=self.device),
+            safe_margin_fraction=unbounded_spec(shape=(1,), dtype=torch.float32, device=self.device),
+            outside_safe_zone=unbounded_spec(shape=(1,), dtype=torch.bool, device=self.device),
             decoded_action=unbounded_spec(shape=(5,), dtype=torch.float32, device=self.device),
             reward_components=composite_spec(
                 device=self.device,
@@ -164,6 +193,19 @@ class TorchRLCPCEnv(EnvBase):
             "ally_under_pressure": self._bool_1(obs["ally_under_pressure"]),
             "self_low_hp": self._bool_1(obs["self_low_hp"]),
             "step_count": torch.tensor([int(obs["step_count"])], dtype=torch.int64, device=self.device),
+            "safe_radius": self._float_1(obs["safe_radius"]),
+            "distance_to_enemy": self._float_1(obs["distance_to_enemy"]),
+            "can_fire": self._bool_1(obs["can_fire"]),
+            "weapon_cooldown_fraction": self._float_1(obs["weapon_cooldown_fraction"]),
+            "target_dir": torch.tensor(
+                [float(obs["target_dir_x"]), float(obs["target_dir_y"])],
+                dtype=torch.float32,
+                device=self.device,
+            ),
+            "aim_alignment": self._float_1(obs["aim_alignment"]),
+            "distance_to_center": self._float_1(obs["distance_to_center"]),
+            "safe_margin_fraction": self._float_1(obs["safe_margin_fraction"]),
+            "outside_safe_zone": self._bool_1(obs["outside_safe_zone"]),
             "done": self._bool_1(done),
             "terminated": self._bool_1(terminated),
             "truncated": self._bool_1(truncated),

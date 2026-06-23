@@ -64,6 +64,7 @@ class PPOConfig:
     selection_metric: str = "eval_mean_episode_reward"
     selection_mode: str = "max"
     selection_eval_episodes: int = 2
+    randomize_enemy_spawn_direction: bool = False
 
 
 def load_config(path: str | Path | None, *, smoke: bool = False) -> PPOConfig:
@@ -237,7 +238,12 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
     torch.manual_seed(cfg.seed)
     device = resolve_device(cfg.device)
     run_dir = _make_run_dir(cfg)
-    env = TorchRLCPCEnv(seed=cfg.seed, max_steps=cfg.max_episode_steps, device=device)
+    env = TorchRLCPCEnv(
+        seed=cfg.seed,
+        max_steps=cfg.max_episode_steps,
+        device=device,
+        randomize_enemy_spawn_direction=cfg.randomize_enemy_spawn_direction,
+    )
     policy = MultiDiscreteActorCritic(hidden_dim=cfg.hidden_dim).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.learning_rate)
     metrics_path = run_dir / "metrics.csv"
@@ -386,6 +392,7 @@ def evaluate_policy_mean_return(
             seed=int(cfg.seed) + seed_offset + episode,
             max_steps=int(cfg.max_episode_steps),
             device=device,
+            randomize_enemy_spawn_direction=cfg.randomize_enemy_spawn_direction,
         )
         obs = env.reset()
         done = False
@@ -416,7 +423,17 @@ def resolve_device(device: str) -> torch.device:
 
 def _metrics_from_td(td) -> dict[str, float]:
     metrics = {}
-    for key in ("avg_ally_distance", "isolation_rate", "damage_dealt", "damage_taken"):
+    for key in (
+        "avg_ally_distance",
+        "isolation_rate",
+        "damage_dealt",
+        "damage_taken",
+        "mean_aim_alignment",
+        "off_target_shot_count",
+        "bullet_hit_count",
+        "outside_safe_zone_rate",
+        "near_edge_outward_count",
+    ):
         try:
             metrics[key] = float(td["metrics", key].reshape(-1)[0].item())
         except Exception:
@@ -459,13 +476,21 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "isolation_rate",
         "damage_dealt",
         "damage_taken",
+        "mean_aim_alignment",
+        "off_target_shot_count",
+        "bullet_hit_count",
+        "outside_safe_zone_rate",
+        "near_edge_outward_count",
         *[f"reward_{key}" for key in REWARD_COMPONENT_KEYS],
+        "total_reward",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: row.get(key, 0.0) for key in fieldnames})
+            csv_row = {key: row.get(key, 0.0) for key in fieldnames}
+            csv_row["total_reward"] = row.get("episodic_return_mean", 0.0)
+            writer.writerow(csv_row)
 
 
 def _make_run_dir(cfg: PPOConfig) -> Path:

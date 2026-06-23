@@ -282,3 +282,25 @@ def test_fire_cooldown_blocks_repeated_fire():
     assert "damage" in [event["event_type"] for event in first["info"]["events"]]
     assert env.agents["team-b-0"]["hp"] == hp_after_first
     assert second_fire_events[0]["metadata"]["cooldown_blocked"] is True
+
+
+def test_safe_zone_damages_agents_outside_radius():
+    env = PythonBattleCoreEnv()
+    env.safe_radius_start = 100.0
+    env.safe_radius_end = 100.0
+    env.zone_damage_per_step = 3.0
+    env.reset(seed=0)
+    env.agents["team-a-0"]["position"] = {"x": 0.0, "y": 0.0}
+    before_hp = env.agents["team-a-0"]["hp"]
+
+    step = env.step(actions_for(env))
+    zone_events = [
+        event for event in step["info"]["events"]
+        if event["event_type"] == "damage"
+        and event.get("target_id") == "team-a-0"
+        and event.get("metadata", {}).get("source") == "safe_zone"
+    ]
+
+    assert env.agents["team-a-0"]["hp"] == before_hp - env.zone_damage_per_step
+    assert zone_events
+    assert step["info"]["snapshot"]["safe_zone"]["radius"] == 100.0

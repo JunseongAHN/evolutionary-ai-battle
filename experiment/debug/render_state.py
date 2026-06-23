@@ -15,6 +15,7 @@ DEAD = (95, 99, 110)
 HIGHLIGHT = (255, 216, 92)
 HP_GREEN = (64, 205, 116)
 HP_RED = (215, 70, 70)
+ZONE_RED = (230, 45, 55, 72)
 
 
 def world_to_screen(
@@ -67,6 +68,7 @@ def draw_debug_view(
     margin = 18
     viewport = (margin, margin, screen_width - panel_width - (margin * 2), screen_height - (margin * 2))
 
+    _draw_safe_zone_overlay(pygame, surface, snapshot, viewport)
     pygame.draw.rect(surface, (72, 78, 92), viewport, width=2)
     actor = snapshot["agents"][controlled_agent_id]
     actor_center = world_to_screen(actor["position"], snapshot, viewport)
@@ -109,6 +111,27 @@ def draw_debug_view(
         surface.blit(rendered, (screen_width - panel_width + 14, y))
         y += 24
     return viewport
+
+
+def _draw_safe_zone_overlay(
+    pygame,
+    surface,
+    snapshot: BattleSnapshot,
+    viewport: tuple[int, int, int, int],
+) -> None:
+    safe_zone = snapshot.get("safe_zone")
+    if not safe_zone:
+        return
+
+    left, top, width, height = viewport
+    overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+    overlay.fill(ZONE_RED)
+
+    center = world_to_screen(safe_zone["center"], snapshot, viewport)
+    local_center = (center[0] - left, center[1] - top)
+    radius = world_radius_to_screen(float(safe_zone["radius"]), snapshot, viewport)
+    pygame.draw.circle(overlay, (0, 0, 0, 0), local_center, radius)
+    surface.blit(overlay, (left, top))
 
 
 def world_radius_to_screen(

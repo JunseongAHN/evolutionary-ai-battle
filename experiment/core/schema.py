@@ -126,6 +126,12 @@ class MapSnapshot(TypedDict):
     obstacles: NotRequired[List[ObstacleSnapshot]]
 
 
+class SafeZoneSnapshot(TypedDict):
+    center: Vec2
+    radius: float
+    damage_per_step: float
+
+
 BattleEventType = Literal[
     "damage",
     "death",
@@ -159,6 +165,7 @@ class BattleSnapshot(TypedDict):
     team_ids: List[TeamId]
     agent_team_map: Dict[AgentId, TeamId]
     map: MapSnapshot
+    safe_zone: NotRequired[SafeZoneSnapshot]
     agents: Dict[AgentId, AgentSnapshot]
     events: List[BattleEvent]
 
