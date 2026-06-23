@@ -52,9 +52,10 @@ In Colab, the default checkpoint path is:
 from debug.model_gameplay import run_model_gameplay
 
 run_model_gameplay(gui=False)
+run_model_gameplay(pt_file="/content/drive/MyDrive/repos/evolutionary-ai-battle/experiment/runs/ppo_smoke_20260622_105638/checkpoint_latest.pt")
 ```
 
-That default opens `/content/drive/MyDrive/repos/evolutionary-ai-battle/ppo_smoke_20260622_105638/checkpoint_latest.pt`.
+That default opens `/content/drive/MyDrive/repos/evolutionary-ai-battle/experiment/runs/ppo_smoke_20260622_105638/checkpoint_latest.pt`.
 Add `gui=True` to show the pygame battle view when pygame/display support is available.
 
 Try the two-agent model runner:

@@ -26,7 +26,7 @@ from training.ppo_policy import MultiDiscreteActorCritic
 
 DEFAULT_GOOGLE_DRIVE_CHECKPOINT = (
     "/content/drive/MyDrive/repos/evolutionary-ai-battle/"
-    "ppo_smoke_20260622_105638/checkpoint_latest.pt"
+    "experiment/runs/ppo_smoke_20260622_105638/checkpoint_latest.pt"
 )
 BEST_CHECKPOINT_NAMES = (
     "checkpoint_selected.pt",
@@ -122,8 +122,9 @@ def load_policy_from_checkpoint(
 
 @torch.no_grad()
 def run_model_gameplay(
-    checkpoint: str | Path | None = None,
+    pt_file: str | Path | None = None,
     *,
+    checkpoint: str | Path | None = None,
     run_dir: str | Path | None = None,
     seed: int = 0,
     max_steps: int | None = None,
@@ -136,7 +137,9 @@ def run_model_gameplay(
     highlight_agent_id: AgentId = "team-a-0",
     print_every: int = 25,
 ) -> dict[str, Any]:
-
+    if pt_file is not None and checkpoint is not None:
+        raise ValueError("Use either pt_file or checkpoint, not both.")
+    checkpoint = pt_file if pt_file is not None else checkpoint
     checkpoint_path = resolve_checkpoint_path(checkpoint, run_dir=run_dir)
     policy, checkpoint_data, resolved_device = load_policy_from_checkpoint(
         checkpoint_path,
