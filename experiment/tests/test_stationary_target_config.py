@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import pathlib
 import sys
 
@@ -26,6 +27,42 @@ def test_stationary_target_config_sets_enemy_flags():
     assert cfg.enemy_move is False
     assert cfg.enemy_fire is False
     assert cfg.stationary_target_mode is True
+
+
+def test_stage1_config_missing_required_fields_raises(tmp_path):
+    path = tmp_path / "local_combat_broken.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                "stage: local_combat",
+                "max_episode_steps: 100",
+                "shrink_safe_zone: false",
+                "use_zone_reward: false",
+                "enemy_move: false",
+                "stationary_target_mode: true",
+                "enemy_spawn_distance_min: 180",
+                "enemy_spawn_distance_max: 240",
+                "bullet_range: 280.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing required field"):
+        load_config(path)
+
+
+def test_stage1_config_resolves_from_different_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    cfg = load_config("experiment/configs/local_combat_in_range.yaml")
+
+    assert cfg.enemy_move is False
+    assert cfg.enemy_fire is False
+    assert cfg.stationary_target_mode is True
+    assert cfg.enemy_spawn_distance_min == pytest.approx(180.0)
+    assert cfg.enemy_spawn_distance_max == pytest.approx(240.0)
+    assert cfg.bullet_range == pytest.approx(280.0)
 
 
 def test_in_range_config_spawns_enemy_within_bullet_range():
@@ -54,6 +91,30 @@ def test_in_range_config_spawns_enemy_within_bullet_range():
         assert distance < float(cfg.bullet_range)
         assert distance >= float(cfg.enemy_spawn_distance_min)
         assert distance <= float(cfg.enemy_spawn_distance_max)
+
+
+def test_in_range_config_debug_prints_stationary_flags_and_ranges(capsys):
+    cfg = load_config("experiment/configs/local_combat_in_range.yaml")
+
+    from training.train_ppo import debug_print_reset_samples
+
+    debug_print_reset_samples(cfg, samples=10, config_path="experiment/configs/local_combat_in_range.yaml")
+    captured = capsys.readouterr().out.strip().splitlines()
+
+    assert captured
+    first = json.loads(captured[0])
+    assert first["config_path"].endswith("local_combat_in_range.yaml")
+    assert float(first["bullet_range"]) == pytest.approx(float(cfg.bullet_range))
+    assert first["enemy_move"] is False
+    assert first["enemy_fire"] is False
+    assert first["stationary_target_mode"] is True
+    for line in captured[1:]:
+        sample = json.loads(line)
+        assert sample["distance_to_enemy"] < sample["bullet_range"]
+        assert sample["within_bullet_range"] is True
+        assert sample["enemy_move"] is False
+        assert sample["enemy_fire"] is False
+        assert sample["stationary_target_mode"] is True
 
 
 def test_stationary_target_env_keeps_enemy_still_and_damage_taken_zero():

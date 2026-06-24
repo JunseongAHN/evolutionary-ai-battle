@@ -93,16 +93,23 @@ class PPOConfig:
     enemy_spawn_direction: str | None = None
     enemy_spawn_distance_min: float | None = None
     enemy_spawn_distance_max: float | None = None
+    config_path: str | None = None
 
 
 def load_config(path: str | Path | None, *, smoke: bool = False) -> PPOConfig:
     cfg = PPOConfig()
     if path is not None:
-        values = _read_simple_yaml(Path(path))
+        config_path = resolve_config_path(path)
+        cfg.config_path = str(config_path)
+        values = _read_simple_yaml(config_path)
         for key, value in values.items():
             if hasattr(cfg, key):
                 current = getattr(cfg, key)
                 setattr(cfg, key, _coerce_value(value, current))
+        for key in ("enemy_spawn_distance_min", "enemy_spawn_distance_max"):
+            if key in values and values[key] not in ("", None):
+                setattr(cfg, key, float(values[key]))
+        _validate_stage1_config(config_path, values)
     if smoke:
         cfg.total_steps = min(cfg.total_steps, 256)
         cfg.rollout_steps = min(cfg.rollout_steps, 64)
@@ -110,6 +117,26 @@ def load_config(path: str | Path | None, *, smoke: bool = False) -> PPOConfig:
         cfg.minibatch_size = min(cfg.minibatch_size, 32)
         cfg.selection_eval_episodes = min(cfg.selection_eval_episodes, 2)
     return cfg
+
+
+def resolve_config_path(path: str | Path | None) -> Path:
+    if path is None:
+        raise ValueError("config path is required")
+    raw_path = Path(path)
+    candidates = [raw_path]
+    experiment_root = Path(__file__).resolve().parents[1]
+    repo_root = experiment_root.parent
+    if not raw_path.is_absolute():
+        candidates.extend(
+            [
+                experiment_root / raw_path,
+                repo_root / raw_path,
+            ]
+        )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return raw_path.resolve(strict=False)
 
 
 def collect_rollout(env: TorchRLCPCEnv, policy: MultiDiscreteActorCritic, cfg: PPOConfig) -> dict[str, Any]:
@@ -846,6 +873,8 @@ def _coerce_value(value: Any, current: Any) -> Any:
         return int(value)
     if isinstance(current, float):
         return float(value)
+    if current is None:
+        return value
     return value
 
 
@@ -870,7 +899,28 @@ def _read_json_if_exists(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def debug_print_reset_samples(cfg: PPOConfig, *, samples: int) -> None:
+def _validate_stage1_config(path: Path, values: dict[str, Any]) -> None:
+    if not path.name.startswith("local_combat_"):
+        return
+    required_keys = (
+        "enemy_move",
+        "enemy_fire",
+        "stationary_target_mode",
+        "enemy_spawn_distance_min",
+        "enemy_spawn_distance_max",
+        "bullet_range",
+    )
+    missing = [key for key in required_keys if key not in values or values[key] in ("", None)]
+    if missing:
+        raise ValueError(
+            f"Stage 1 config {path} is missing required field(s): {', '.join(missing)}"
+        )
+
+
+def debug_print_reset_samples(cfg: PPOConfig, *, samples: int, config_path: str | None = None) -> None:
+    source_path_text = config_path or cfg.config_path
+    source_path = resolve_config_path(source_path_text) if source_path_text else None
+    raw_yaml = _read_simple_yaml(source_path) if source_path is not None else {}
     device = resolve_device(cfg.device)
     env = TorchRLCPCEnv(
         seed=cfg.seed,
@@ -893,6 +943,36 @@ def debug_print_reset_samples(cfg: PPOConfig, *, samples: int) -> None:
         bullet_damage=cfg.bullet_damage,
         bullet_hit_radius=cfg.bullet_hit_radius,
     )
+    print(json.dumps(
+        {
+            "config_path": config_path or cfg.config_path,
+            "raw_yaml": {
+                "bullet_range": raw_yaml.get("bullet_range"),
+                "enemy_spawn_distance_min": raw_yaml.get("enemy_spawn_distance_min"),
+                "enemy_spawn_distance_max": raw_yaml.get("enemy_spawn_distance_max"),
+                "enemy_move": raw_yaml.get("enemy_move"),
+                "enemy_fire": raw_yaml.get("enemy_fire"),
+                "stationary_target_mode": raw_yaml.get("stationary_target_mode"),
+            },
+            "ppo_config": {
+                "bullet_range": cfg.bullet_range,
+                "enemy_spawn_distance_min": cfg.enemy_spawn_distance_min,
+                "enemy_spawn_distance_max": cfg.enemy_spawn_distance_max,
+                "enemy_move": cfg.enemy_move,
+                "enemy_fire": cfg.enemy_fire,
+                "stationary_target_mode": cfg.stationary_target_mode,
+            },
+            "env_internal": {
+                "bullet_range": getattr(env.cpc_env, "fire_range", None),
+                "enemy_spawn_distance_min": getattr(env.cpc_env, "enemy_spawn_distance_min", None),
+                "enemy_spawn_distance_max": getattr(env.cpc_env, "enemy_spawn_distance_max", None),
+                "enemy_move": getattr(env.cpc_env, "enemy_move", None),
+                "enemy_fire": getattr(env.cpc_env, "enemy_fire", None),
+                "stationary_target_mode": getattr(env.cpc_env, "stationary_target_mode", None),
+            },
+        },
+        sort_keys=True,
+    ))
     for index in range(max(0, int(samples))):
         td = env.reset()
         metrics = _metrics_from_td(td)
@@ -942,7 +1022,7 @@ def main() -> None:
     args = parser.parse_args()
     cfg = load_config(args.config, smoke=args.smoke)
     if args.debug_reset_samples > 0:
-        debug_print_reset_samples(cfg, samples=args.debug_reset_samples)
+        debug_print_reset_samples(cfg, samples=args.debug_reset_samples, config_path=args.config)
         return
     result = train_ppo(cfg, progress=args.progress)
     print(json.dumps(result, indent=2))

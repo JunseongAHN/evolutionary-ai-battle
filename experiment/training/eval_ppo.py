@@ -140,6 +140,19 @@ def debug_print_reset_samples_from_checkpoint(
     device = torch.device(device)
     checkpoint_data = load_checkpoint(checkpoint, map_location=device)
     cfg = checkpoint_data.get("config", {})
+    print(json.dumps(
+        {
+            "checkpoint": str(checkpoint),
+            "config_path": cfg.get("config_path"),
+            "bullet_range": cfg.get("bullet_range"),
+            "enemy_spawn_distance_min": cfg.get("enemy_spawn_distance_min"),
+            "enemy_spawn_distance_max": cfg.get("enemy_spawn_distance_max"),
+            "enemy_move": cfg.get("enemy_move"),
+            "enemy_fire": cfg.get("enemy_fire"),
+            "stationary_target_mode": cfg.get("stationary_target_mode"),
+        },
+        sort_keys=True,
+    ))
     env = TorchRLCPCEnv(
         seed=int(cfg.get("seed", 0)),
         max_steps=int(cfg.get("max_episode_steps", 50)),

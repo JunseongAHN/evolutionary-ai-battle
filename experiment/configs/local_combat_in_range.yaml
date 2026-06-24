@@ -15,8 +15,8 @@ enemy_spawn_directions:
   - lower_right
   - upper_left
   - lower_left
-enemy_spawn_distance_min: 180.0
-enemy_spawn_distance_max: 240.0
+enemy_spawn_distance_min: 180
+enemy_spawn_distance_max: 240
 
 fire_interval_steps: 5
 bullet_speed: 140.0
