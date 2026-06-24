@@ -47,12 +47,17 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     damage_taken = 0.0
     fire_requested_count = 0
     shot_fired_count = 0
+    fire_blocked_count = 0
+    fire_blocked_cooldown_count = 0
+    fire_blocked_other_count = 0
     aim_bins = Counter()
+    ideal_aim_bins = Counter()
     aim_errors = Counter()
     shot_aim_errors = Counter()
     hit_aim_errors = Counter()
     missed_aim_errors = Counter()
     range_counts = Counter()
+    shot_range_counts = Counter()
     shot_good_range_count = 0
     hit_good_range_count = 0
     miss_too_far_count = 0
@@ -73,19 +78,32 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         damage_taken += damage_taken_delta
 
         fire = step.get("fire", {})
-        if bool(fire.get("requested", False)):
+        fire_requested = bool(fire.get("requested", False))
+        if fire_requested:
             fire_requested_count += 1
         shot_fired = bool(fire.get("shot_fired", False))
         if shot_fired:
             shot_fired_count += 1
+        if fire_requested and not shot_fired:
+            fire_blocked_count += 1
+            blocked_reason = fire.get("blocked_reason")
+            if blocked_reason == "cooldown":
+                fire_blocked_cooldown_count += 1
+            else:
+                fire_blocked_other_count += 1
 
         aim = step.get("aim", {})
         aim_bin = _safe_int(aim.get("aim_bin"))
+        ideal_aim_bin = _safe_int(aim.get("ideal_aim_bin"))
         aim_error = _safe_int(aim.get("aim_bin_error"))
         if aim_bin is not None:
             aim_bins[aim_bin] += 1
+        if ideal_aim_bin is not None:
+            ideal_aim_bins[ideal_aim_bin] += 1
         if aim_error is not None:
             aim_errors[aim_error] += 1
+            if shot_fired:
+                shot_aim_errors[aim_error] += 1
 
         range_info = step.get("range", {})
         distance = _safe_float(range_info.get("distance_to_enemy"))
@@ -100,6 +118,13 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
             range_counts["too_far"] += 1
         if damage_taken_delta > 0.0 and range_info.get("too_close"):
             damage_taken_too_close_count += 1
+        if shot_fired:
+            if range_info.get("in_good_range"):
+                shot_range_counts["good"] += 1
+            elif range_info.get("too_close"):
+                shot_range_counts["too_close"] += 1
+            elif range_info.get("too_far"):
+                shot_range_counts["too_far"] += 1
 
         for event in step.get("events", []):
             event_type = event.get("type")
@@ -107,50 +132,64 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
             owner_id = event.get("owner_id", "self")
             if bullet_id is None:
                 continue
-            if owner_id != "self":
-                continue
+            owner_class = _owner_class(owner_id)
             if event_type == "bullet_spawned":
                 bullets[bullet_id] = {
                     "bullet_id": bullet_id,
+                    "owner_id": owner_class,
+                    "raw_owner_id": owner_id,
                     "spawn_step": int(step.get("t", 0)),
+                    "spawn_pos": event.get("pos"),
                     "aim_bin_at_spawn": aim_bin,
                     "aim_bin_error_at_spawn": aim_error,
                     "range_at_spawn": distance,
                     "hit_step": None,
                     "expire_step": None,
-                    "hit_or_miss": "pending",
+                    "hit": False,
+                    "expired": False,
                     "travel_steps": 0,
                     "target_id": None,
                     "good_range_at_spawn": bool(range_info.get("in_good_range", False)),
                     "too_far_at_spawn": bool(range_info.get("too_far", False)),
                 }
-                if aim_error is not None:
-                    shot_aim_errors[aim_error] += 1
-                if range_info.get("in_good_range"):
+                if owner_class == "self" and range_info.get("in_good_range"):
                     shot_good_range_count += 1
             elif event_type == "bullet_moved" and bullet_id in bullets:
                 bullets[bullet_id]["travel_steps"] += 1
             elif event_type == "bullet_hit" and bullet_id in bullets:
                 bullets[bullet_id]["hit_step"] = int(step.get("t", 0))
-                bullets[bullet_id]["hit_or_miss"] = "hit"
+                bullets[bullet_id]["hit"] = True
                 bullets[bullet_id]["target_id"] = event.get("target_id")
-                spawn_error = bullets[bullet_id].get("aim_bin_error_at_spawn")
-                if spawn_error is not None:
-                    hit_aim_errors[int(spawn_error)] += 1
-                if bullets[bullet_id].get("good_range_at_spawn"):
-                    hit_good_range_count += 1
+                if bullets[bullet_id].get("owner_id") == "self":
+                    spawn_error = bullets[bullet_id].get("aim_bin_error_at_spawn")
+                    if spawn_error is not None:
+                        hit_aim_errors[int(spawn_error)] += 1
+                    if bullets[bullet_id].get("good_range_at_spawn"):
+                        hit_good_range_count += 1
             elif event_type == "bullet_expired" and bullet_id in bullets and bullets[bullet_id].get("hit_step") is None:
                 bullets[bullet_id]["expire_step"] = int(step.get("t", 0))
-                bullets[bullet_id]["hit_or_miss"] = "miss"
-                spawn_error = bullets[bullet_id].get("aim_bin_error_at_spawn")
-                if spawn_error is not None:
-                    missed_aim_errors[int(spawn_error)] += 1
-                if bullets[bullet_id].get("too_far_at_spawn"):
-                    miss_too_far_count += 1
+                bullets[bullet_id]["expired"] = True
+                if bullets[bullet_id].get("owner_id") == "self":
+                    spawn_error = bullets[bullet_id].get("aim_bin_error_at_spawn")
+                    if spawn_error is not None:
+                        missed_aim_errors[int(spawn_error)] += 1
+                    if bullets[bullet_id].get("too_far_at_spawn"):
+                        miss_too_far_count += 1
 
-    self_bullet_hit_count = sum(1 for bullet in bullets.values() if bullet.get("hit_or_miss") == "hit")
-    self_missed_shot_count = sum(1 for bullet in bullets.values() if bullet.get("hit_or_miss") == "miss")
-    shot_fired_count = max(shot_fired_count, len(bullets))
+    self_bullets = [bullet for bullet in bullets.values() if bullet.get("owner_id") == "self"]
+    enemy_bullets = [bullet for bullet in bullets.values() if bullet.get("owner_id") == "enemy"]
+    self_bullet_spawn_count = len(self_bullets)
+    enemy_bullet_spawn_count = len(enemy_bullets)
+    self_bullet_hit_count = sum(1 for bullet in self_bullets if bullet.get("hit"))
+    enemy_bullet_hit_self_count = sum(
+        1 for bullet in enemy_bullets if bullet.get("hit") and _owner_class(bullet.get("target_id")) == "self"
+    )
+    self_bullet_expired_count = sum(1 for bullet in self_bullets if bullet.get("expired"))
+    enemy_bullet_expired_count = sum(1 for bullet in enemy_bullets if bullet.get("expired"))
+    self_bullet_missed_count = sum(1 for bullet in self_bullets if bullet.get("expired") and not bullet.get("hit"))
+    enemy_bullet_missed_count = sum(1 for bullet in enemy_bullets if bullet.get("expired") and not bullet.get("hit"))
+    self_bullet_alive_at_episode_end = sum(1 for bullet in self_bullets if not bullet.get("hit") and not bullet.get("expired"))
+    enemy_bullet_alive_at_episode_end = sum(1 for bullet in enemy_bullets if not bullet.get("hit") and not bullet.get("expired"))
 
     enemy_max_hp = float(final_metrics.get("enemy_max_hp", 100.0) or 100.0)
     self_max_hp = float(final_metrics.get("self_max_hp", 100.0) or 100.0)
@@ -158,10 +197,12 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     damage_taken = float(final_metrics.get("damage_taken", damage_taken) or damage_taken)
     damage_dealt_ratio = damage_dealt / max(enemy_max_hp, 1.0)
     damage_taken_ratio = damage_taken / max(self_max_hp, 1.0)
+    damage_trade = damage_dealt - damage_taken
     hit_ratio = self_bullet_hit_count / max(shot_fired_count, 1)
-    missed_shot_rate = self_missed_shot_count / max(shot_fired_count, 1)
+    missed_shot_rate = self_bullet_missed_count / max(shot_fired_count, 1)
 
     max_aim_count = max(aim_bins.values(), default=0)
+    dominant_aim_bin, dominant_aim_count = aim_bins.most_common(1)[0] if aim_bins else (None, 0)
     exact_steps = sum(count for error, count in aim_errors.items() if error == 0)
     within_1_steps = sum(count for error, count in aim_errors.items() if error <= 1)
     bad_steps = sum(count for error, count in aim_errors.items() if error >= 3)
@@ -171,9 +212,11 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     hit_exact = sum(count for error, count in hit_aim_errors.items() if error == 0)
 
     metrics = {
+        "episode_length": len(steps),
         "total_reward": total_reward,
         "damage_dealt": damage_dealt,
         "damage_taken": damage_taken,
+        "damage_trade": damage_trade,
         "enemy_max_hp": enemy_max_hp,
         "self_max_hp": self_max_hp,
         "damage_dealt_ratio": damage_dealt_ratio,
@@ -184,15 +227,33 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "timeout": not bool(float(final_metrics.get("self_dead", 0.0) or 0.0))
         and not bool(float(final_metrics.get("enemy_dead", 0.0) or 0.0)),
         "fire_requested_count": fire_requested_count,
+        "fire_request_rate": fire_requested_count / total_steps,
         "shot_fired_count": shot_fired_count,
+        "shot_fired_rate": shot_fired_count / total_steps,
+        "fire_blocked_count": fire_blocked_count,
+        "fire_blocked_cooldown_count": fire_blocked_cooldown_count,
+        "fire_blocked_other_count": fire_blocked_other_count,
+        "shot_fired_per_fire_request": shot_fired_count / max(fire_requested_count, 1),
+        "self_bullet_spawn_count": self_bullet_spawn_count,
         "self_bullet_hit_count": self_bullet_hit_count,
-        "self_missed_shot_count": self_missed_shot_count,
+        "self_bullet_expired_count": self_bullet_expired_count,
+        "self_bullet_missed_count": self_bullet_missed_count,
+        "self_missed_shot_count": self_bullet_missed_count,
+        "self_bullet_alive_at_episode_end": self_bullet_alive_at_episode_end,
+        "enemy_bullet_spawn_count": enemy_bullet_spawn_count,
+        "enemy_bullet_hit_self_count": enemy_bullet_hit_self_count,
+        "enemy_bullet_expired_count": enemy_bullet_expired_count,
+        "enemy_bullet_missed_count": enemy_bullet_missed_count,
+        "enemy_bullet_alive_at_episode_end": enemy_bullet_alive_at_episode_end,
         "hit_ratio": hit_ratio,
         "missed_shot_rate": missed_shot_rate,
         "bullet_hit_per_shot": hit_ratio,
         "shot_efficiency": hit_ratio * min(damage_dealt_ratio, 1.0),
         "aim_bin_distribution": dict(sorted(aim_bins.items())),
+        "ideal_aim_bin_distribution": dict(sorted(ideal_aim_bins.items())),
         "aim_bin_0_rate": aim_bins.get(0, 0) / total_steps,
+        "dominant_aim_bin": dominant_aim_bin,
+        "dominant_aim_bin_rate": dominant_aim_count / total_steps,
         "aim_error_distribution": dict(sorted(aim_errors.items())),
         "exact_aim_match_rate": exact_steps / total_steps,
         "within_1_bin_aim_rate": within_1_steps / total_steps,
@@ -200,15 +261,19 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "shot_exact_aim_rate": shot_exact / max(shot_fired_count, 1),
         "shot_within_1_bin_rate": shot_within_1 / max(shot_fired_count, 1),
         "shot_bad_aim_rate": shot_bad / max(shot_fired_count, 1),
+        "shot_aim_error_distribution": dict(sorted(shot_aim_errors.items())),
         "hit_exact_aim_rate": hit_exact / max(self_bullet_hit_count, 1),
+        "hit_aim_error_distribution": dict(sorted(hit_aim_errors.items())),
         "missed_shot_aim_error_distribution": dict(sorted(missed_aim_errors.items())),
         "good_range_rate": range_counts["good"] / total_steps,
         "too_close_rate": range_counts["too_close"] / total_steps,
         "too_far_rate": range_counts["too_far"] / total_steps,
         "avg_distance_to_enemy": distance_sum / max(distance_count, 1),
+        "shot_too_close_rate": shot_range_counts["too_close"] / max(shot_fired_count, 1),
+        "shot_too_far_rate": shot_range_counts["too_far"] / max(shot_fired_count, 1),
         "shot_good_range_rate": shot_good_range_count / max(shot_fired_count, 1),
         "hit_good_range_rate": hit_good_range_count / max(self_bullet_hit_count, 1),
-        "miss_too_far_rate": miss_too_far_count / max(self_missed_shot_count, 1),
+        "miss_too_far_rate": miss_too_far_count / max(self_bullet_missed_count, 1),
         "damage_taken_too_close_rate": damage_taken_too_close_count / max(total_steps, 1),
     }
     warnings = detect_warnings(metrics, component_stats, total_steps, max_aim_count)
@@ -219,6 +284,7 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "total_steps": len(steps),
         "metrics": metrics,
         "reward_components": _finalize_component_stats(component_stats, total_steps),
+        "bullet_lifecycle": list(bullets.values()),
         "bullets": list(bullets.values()),
         "warnings": warnings,
     }
@@ -231,6 +297,29 @@ def detect_warnings(
     max_aim_count: int,
 ) -> list[str]:
     warnings = []
+    if metrics["fire_requested_count"] > 0 and metrics["shot_fired_count"] == 0:
+        warnings.append("fire_requested_but_no_actual_shots")
+    if metrics["fire_requested_count"] == 0:
+        warnings.append("policy_never_requested_fire")
+    if (
+        metrics["shot_fired_count"] > 0
+        and metrics["self_bullet_hit_count"] == 0
+        and metrics["self_bullet_missed_count"] == 0
+        and metrics["self_bullet_alive_at_episode_end"] == 0
+    ):
+        warnings.append("shots_fired_without_bullet_lifecycle_outcome")
+    if metrics["dominant_aim_bin_rate"] > 0.75:
+        warnings.append("aim_collapse_dominant_bin")
+    if metrics["aim_bin_0_rate"] > 0.75:
+        warnings.append("aim_collapse_to_bin_0")
+    if metrics["damage_dealt_ratio"] == 0:
+        warnings.append("no_damage_dealt")
+    if metrics["damage_taken_ratio"] >= 1.0:
+        warnings.append("agent_lost_all_hp")
+    if metrics["fire_request_rate"] > 0.8 and metrics["bullet_hit_per_shot"] < 0.2:
+        warnings.append("fire_spam_low_hit_efficiency")
+    if metrics["good_range_rate"] > 0.6 and metrics["damage_dealt_ratio"] < 0.1:
+        warnings.append("good_range_without_combat_effectiveness")
     if metrics["total_reward"] > 0.0 and metrics["damage_dealt_ratio"] < 0.2:
         warnings.append("high_return_low_damage")
     if not metrics["self_dead"] and metrics["damage_dealt_ratio"] < 0.1 and metrics["shot_fired_count"] < 3:
@@ -254,21 +343,58 @@ def aggregate_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     if not episodes:
         return {}
     keys = (
+        "episode_length",
         "total_reward",
+        "damage_dealt",
+        "damage_taken",
+        "damage_trade",
         "damage_dealt_ratio",
         "damage_taken_ratio",
         "damage_trade_ratio",
+        "fire_requested_count",
+        "fire_request_rate",
+        "shot_fired_count",
+        "shot_fired_rate",
+        "fire_blocked_count",
+        "fire_blocked_cooldown_count",
+        "fire_blocked_other_count",
+        "shot_fired_per_fire_request",
+        "self_bullet_spawn_count",
+        "self_bullet_hit_count",
+        "self_bullet_expired_count",
+        "self_bullet_missed_count",
+        "self_bullet_alive_at_episode_end",
+        "enemy_bullet_spawn_count",
+        "enemy_bullet_hit_self_count",
+        "enemy_bullet_expired_count",
+        "enemy_bullet_missed_count",
+        "enemy_bullet_alive_at_episode_end",
         "hit_ratio",
         "missed_shot_rate",
         "bullet_hit_per_shot",
         "aim_bin_0_rate",
+        "dominant_aim_bin_rate",
         "exact_aim_match_rate",
+        "within_1_bin_aim_rate",
+        "bad_aim_rate",
+        "shot_exact_aim_rate",
+        "shot_within_1_bin_rate",
+        "shot_bad_aim_rate",
+        "avg_distance_to_enemy",
         "good_range_rate",
+        "too_close_rate",
+        "too_far_rate",
+        "shot_good_range_rate",
+        "hit_good_range_rate",
+        "miss_too_far_rate",
         "reward_hacking_warning_count",
     )
     aggregate = {}
     for key in keys:
         aggregate[key] = sum(float(ep["metrics"].get(key, 0.0)) for ep in episodes) / len(episodes)
+    dominant_bins = Counter(ep["metrics"].get("dominant_aim_bin") for ep in episodes)
+    dominant_bins.pop(None, None)
+    aggregate["dominant_aim_bin"] = dominant_bins.most_common(1)[0][0] if dominant_bins else None
     warning_counts = Counter(warning for ep in episodes for warning in ep.get("warnings", []))
     aggregate["warnings"] = dict(sorted(warning_counts.items()))
     return aggregate
@@ -409,6 +535,17 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except Exception:
         return None
+
+
+def _owner_class(owner_id: Any) -> str:
+    if owner_id is None:
+        return "unknown"
+    normalized = str(owner_id).lower()
+    if normalized in {"self", "agent", "player", "manual", "controlled"}:
+        return "self"
+    if normalized in {"enemy", "opponent", "target"}:
+        return "enemy"
+    return normalized
 
 
 def main() -> None:

@@ -18,7 +18,9 @@ def _step(
     requested: bool = False,
     shot_fired: bool = False,
     aim_bin: int = 0,
+    ideal_aim_bin: int = 0,
     aim_error: int = 0,
+    blocked_reason: str | None = None,
     events: list[dict] | None = None,
     reward_components: dict | None = None,
     damage_dealt: float = 0.0,
@@ -26,10 +28,12 @@ def _step(
     in_good_range: bool = True,
     too_far: bool = False,
 ) -> dict:
+    if blocked_reason is None and requested and not shot_fired:
+        blocked_reason = "cooldown"
     return {
         "t": t,
-        "fire": {"requested": requested, "shot_fired": shot_fired, "blocked_reason": "cooldown" if requested and not shot_fired else None},
-        "aim": {"aim_bin": aim_bin, "aim_bin_error": aim_error, "alignment": 1.0, "angle_error_deg": 0.0},
+        "fire": {"requested": requested, "shot_fired": shot_fired, "blocked_reason": blocked_reason},
+        "aim": {"aim_bin": aim_bin, "ideal_aim_bin": ideal_aim_bin, "aim_bin_error": aim_error, "alignment": 1.0, "angle_error_deg": 0.0},
         "range": {"distance_to_enemy": 120.0, "in_good_range": in_good_range, "too_close": False, "too_far": too_far},
         "events": events or [],
         "reward": sum((reward_components or {}).values()),
@@ -120,6 +124,135 @@ def test_fire_requested_during_cooldown_not_counted_as_shot():
     metrics = analysis["episodes"][0]["metrics"]
     assert metrics["fire_requested_count"] == 1
     assert metrics["shot_fired_count"] == 0
+    assert metrics["fire_blocked_cooldown_count"] == 1
+
+
+def test_eval_analysis_includes_fire_counts():
+    metrics = analyze_result(_result([_step(0, requested=True, shot_fired=False)]))["episodes"][0]["metrics"]
+
+    assert "fire_requested_count" in metrics
+    assert "shot_fired_count" in metrics
+    assert "fire_blocked_cooldown_count" in metrics
+
+
+def test_self_bullet_hit_count_excludes_enemy_bullets():
+    analysis = analyze_result(
+        _result(
+            [
+                _step(0, events=[{"type": "bullet_spawned", "bullet_id": "enemy-1", "owner_id": "enemy"}]),
+                _step(1, events=[{"type": "bullet_hit", "bullet_id": "enemy-1", "owner_id": "enemy", "target_id": "self"}]),
+            ]
+        )
+    )
+
+    metrics = analysis["episodes"][0]["metrics"]
+    assert metrics["self_bullet_hit_count"] == 0
+
+
+def test_enemy_bullet_hit_self_count():
+    analysis = analyze_result(
+        _result(
+            [
+                _step(0, events=[{"type": "bullet_spawned", "bullet_id": "enemy-1", "owner_id": "enemy"}]),
+                _step(1, events=[{"type": "bullet_hit", "bullet_id": "enemy-1", "owner_id": "enemy", "target_id": "self"}]),
+            ]
+        )
+    )
+
+    metrics = analysis["episodes"][0]["metrics"]
+    assert metrics["enemy_bullet_hit_self_count"] == 1
+
+
+def test_self_bullet_expired_without_hit_counts_as_miss():
+    analysis = analyze_result(
+        _result(
+            [
+                _step(0, requested=True, shot_fired=True, events=[{"type": "bullet_spawned", "bullet_id": "b1", "owner_id": "self"}]),
+                _step(1, events=[{"type": "bullet_expired", "bullet_id": "b1", "owner_id": "self"}]),
+            ]
+        )
+    )
+
+    metrics = analysis["episodes"][0]["metrics"]
+    assert metrics["self_bullet_missed_count"] == 1
+
+
+def test_bullet_hit_not_counted_as_miss():
+    analysis = analyze_result(
+        _result(
+            [
+                _step(0, requested=True, shot_fired=True, events=[{"type": "bullet_spawned", "bullet_id": "b1", "owner_id": "self"}]),
+                _step(1, events=[{"type": "bullet_hit", "bullet_id": "b1", "owner_id": "self", "target_id": "enemy"}]),
+            ]
+        )
+    )
+
+    metrics = analysis["episodes"][0]["metrics"]
+    assert metrics["self_bullet_hit_count"] == 1
+    assert metrics["self_bullet_missed_count"] == 0
+
+
+def test_alive_bullet_at_episode_end():
+    analysis = analyze_result(
+        _result([_step(0, requested=True, shot_fired=True, events=[{"type": "bullet_spawned", "bullet_id": "b1", "owner_id": "self"}])])
+    )
+
+    assert analysis["episodes"][0]["metrics"]["self_bullet_alive_at_episode_end"] == 1
+
+
+def test_aim_distribution_fields_exist():
+    metrics = analyze_result(_result([_step(0, aim_bin=2, ideal_aim_bin=3, aim_error=1)]))["episodes"][0]["metrics"]
+
+    assert metrics["aim_bin_distribution"] == {2: 1}
+    assert metrics["ideal_aim_bin_distribution"] == {3: 1}
+    assert metrics["aim_error_distribution"] == {1: 1}
+
+
+def test_shot_time_aim_distribution():
+    metrics = analyze_result(
+        _result(
+            [
+                _step(0, requested=True, shot_fired=True, aim_error=2),
+                _step(1, requested=True, shot_fired=False, aim_error=0),
+            ]
+        )
+    )["episodes"][0]["metrics"]
+
+    assert metrics["shot_aim_error_distribution"] == {2: 1}
+
+
+def test_warning_no_actual_shots():
+    warnings = analyze_result(_result([_step(0, requested=True, shot_fired=False)]))["episodes"][0]["warnings"]
+
+    assert "fire_requested_but_no_actual_shots" in warnings
+
+
+def test_warning_no_damage_dealt():
+    warnings = analyze_result(_result([_step(0)]))["episodes"][0]["warnings"]
+
+    assert "no_damage_dealt" in warnings
+
+
+def test_warning_full_damage_taken():
+    warnings = analyze_result(_result([_step(0)], {"damage_taken": 100.0}))["episodes"][0]["warnings"]
+
+    assert "agent_lost_all_hp" in warnings
+
+
+def test_training_log_eval_analysis_has_new_keys():
+    analysis = analyze_result(
+        _result(
+            [
+                _step(0, requested=True, shot_fired=True, events=[{"type": "bullet_spawned", "bullet_id": "b1", "owner_id": "self"}]),
+                _step(1, events=[{"type": "bullet_spawned", "bullet_id": "e1", "owner_id": "enemy"}]),
+                _step(2, events=[{"type": "bullet_hit", "bullet_id": "e1", "owner_id": "enemy", "target_id": "self"}]),
+            ]
+        )
+    )
+
+    aggregate = analysis["aggregate"]
+    for key in ("fire_requested_count", "shot_fired_count", "self_bullet_spawn_count", "enemy_bullet_hit_self_count"):
+        assert key in aggregate
 
 
 def test_damage_trade_ratio():
