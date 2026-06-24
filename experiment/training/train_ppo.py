@@ -36,11 +36,11 @@ except ModuleNotFoundError:
 if __package__:
     from .cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
     from .ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
-    from .torchrl_env import REWARD_COMPONENT_KEYS, TorchRLCPCEnv
+    from .torchrl_env import METRIC_KEYS, REWARD_COMPONENT_KEYS, TorchRLCPCEnv
 else:
     from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
     from ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
-    from torchrl_env import REWARD_COMPONENT_KEYS, TorchRLCPCEnv
+    from torchrl_env import METRIC_KEYS, REWARD_COMPONENT_KEYS, TorchRLCPCEnv
 
 
 @dataclass
@@ -61,10 +61,29 @@ class PPOConfig:
     max_episode_steps: int = 50
     hidden_dim: int = 64
     run_dir: str = "experiment/runs"
+    stage: str = "local_combat"
+    shrink_safe_zone: bool = False
+    use_zone_reward: bool = False
+    fire_interval_steps: int = 5
+    bullet_speed: float = 140.0
+    bullet_range: float = 280.0
+    bullet_damage: float = 10.0
+    bullet_hit_radius: float = 12.0
     selection_metric: str = "eval_mean_episode_reward"
     selection_mode: str = "max"
     selection_eval_episodes: int = 2
-    randomize_enemy_spawn_direction: bool = False
+    randomize_enemy_spawn_direction: bool = True
+    enemy_spawn_directions: tuple[str, ...] = (
+        "right",
+        "left",
+        "up",
+        "down",
+        "upper_right",
+        "lower_right",
+        "upper_left",
+        "lower_left",
+    )
+    enemy_spawn_direction: str | None = None
 
 
 def load_config(path: str | Path | None, *, smoke: bool = False) -> PPOConfig:
@@ -243,6 +262,16 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         max_steps=cfg.max_episode_steps,
         device=device,
         randomize_enemy_spawn_direction=cfg.randomize_enemy_spawn_direction,
+        enemy_spawn_directions=cfg.enemy_spawn_directions,
+        enemy_spawn_direction=cfg.enemy_spawn_direction,
+        stage=cfg.stage,
+        shrink_safe_zone=cfg.shrink_safe_zone,
+        use_zone_reward=cfg.use_zone_reward,
+        fire_interval_steps=cfg.fire_interval_steps,
+        bullet_speed=cfg.bullet_speed,
+        bullet_range=cfg.bullet_range,
+        bullet_damage=cfg.bullet_damage,
+        bullet_hit_radius=cfg.bullet_hit_radius,
     )
     policy = MultiDiscreteActorCritic(hidden_dim=cfg.hidden_dim).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.learning_rate)
@@ -393,6 +422,16 @@ def evaluate_policy_mean_return(
             max_steps=int(cfg.max_episode_steps),
             device=device,
             randomize_enemy_spawn_direction=cfg.randomize_enemy_spawn_direction,
+            enemy_spawn_directions=cfg.enemy_spawn_directions,
+            enemy_spawn_direction=cfg.enemy_spawn_direction,
+            stage=cfg.stage,
+            shrink_safe_zone=cfg.shrink_safe_zone,
+            use_zone_reward=cfg.use_zone_reward,
+            fire_interval_steps=cfg.fire_interval_steps,
+            bullet_speed=cfg.bullet_speed,
+            bullet_range=cfg.bullet_range,
+            bullet_damage=cfg.bullet_damage,
+            bullet_hit_radius=cfg.bullet_hit_radius,
         )
         obs = env.reset()
         done = False
@@ -423,17 +462,7 @@ def resolve_device(device: str) -> torch.device:
 
 def _metrics_from_td(td) -> dict[str, float]:
     metrics = {}
-    for key in (
-        "avg_ally_distance",
-        "isolation_rate",
-        "damage_dealt",
-        "damage_taken",
-        "mean_aim_alignment",
-        "off_target_shot_count",
-        "bullet_hit_count",
-        "outside_safe_zone_rate",
-        "near_edge_outward_count",
-    ):
+    for key in METRIC_KEYS:
         try:
             metrics[key] = float(td["metrics", key].reshape(-1)[0].item())
         except Exception:
@@ -472,15 +501,7 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "entropy",
         "approx_kl",
         "clip_fraction",
-        "avg_ally_distance",
-        "isolation_rate",
-        "damage_dealt",
-        "damage_taken",
-        "mean_aim_alignment",
-        "off_target_shot_count",
-        "bullet_hit_count",
-        "outside_safe_zone_rate",
-        "near_edge_outward_count",
+        *METRIC_KEYS,
         *[f"reward_{key}" for key in REWARD_COMPONENT_KEYS],
         "total_reward",
     ]
@@ -506,22 +527,43 @@ def _mean(values: list[float] | list[int]) -> float:
     return float(sum(values) / len(values))
 
 
-def _read_simple_yaml(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
+def _read_simple_yaml(path: Path) -> dict[str, Any]:
+    values: dict[str, Any] = {}
     if not path.exists():
         return values
+    current_list_key: str | None = None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.split("#", 1)[0].strip()
-        if not line or ":" not in line:
+        line = raw_line.split("#", 1)[0].rstrip()
+        stripped = line.strip()
+        if not stripped:
+            current_list_key = None
             continue
-        key, value = line.split(":", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
+        if current_list_key is not None and stripped.startswith("- "):
+            values[current_list_key].append(stripped[2:].strip().strip('"').strip("'"))
+            continue
+        current_list_key = None
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if value == "":
+            values[key] = []
+            current_list_key = key
+            continue
+        values[key] = value.strip('"').strip("'")
     return values
 
 
-def _coerce_value(value: str, current: Any) -> Any:
+def _coerce_value(value: Any, current: Any) -> Any:
+    if isinstance(current, tuple):
+        if isinstance(value, list):
+            return tuple(str(item) for item in value)
+        return tuple(item.strip() for item in str(value).split(",") if item.strip())
+    if value == "null" or value == "None":
+        return None
     if isinstance(current, bool):
-        return value.lower() in {"1", "true", "yes", "on"}
+        return str(value).lower() in {"1", "true", "yes", "on"}
     if isinstance(current, int) and not isinstance(current, bool):
         return int(value)
     if isinstance(current, float):

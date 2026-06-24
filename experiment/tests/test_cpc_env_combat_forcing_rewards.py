@@ -9,7 +9,7 @@ EXPERIMENT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(EXPERIMENT_ROOT) not in sys.path:
     sys.path.insert(0, str(EXPERIMENT_ROOT))
 
-from training.cpc_env import CPCEnv
+from training.cpc_env import AIM_BINS, CPCEnv, aim_bin_to_vec, circular_bin_distance, vec_to_aim_bin
 
 
 NOOP = {"move": 0, "aim": 0, "fire": 0}
@@ -28,29 +28,24 @@ def put_enemy_to_right(env: CPCEnv, *, distance: float = 120.0) -> None:
     env.state["enemy_pos"] = {"x": 500.0 + distance, "y": 500.0}
 
 
-def test_noop_full_episode_no_longer_gets_high_survival_reward():
+def test_noop_does_not_get_survival_or_fire_request_reward():
     env = CPCEnv(seed=1, max_steps=100)
-    total = 0.0
-    done = False
 
-    while not done:
-        _, reward, done, _ = env.step(NOOP)
-        total += reward
+    _, _, _, info = env.step(NOOP)
 
-    assert total < 0.5
+    assert "survival" not in info["reward_components"]
+    assert "attack_intent" not in info["reward_components"]
+    assert "zone_pressure" not in info["reward_components"]
 
 
-def test_moving_toward_enemy_rewards_more_than_moving_away_in_direct_contact():
-    toward = CPCEnv(seed=1, max_steps=4)
-    away = CPCEnv(seed=1, max_steps=4)
-    put_enemy_to_right(toward)
-    put_enemy_to_right(away)
+def test_stage1_safe_zone_does_not_shrink():
+    env = CPCEnv(seed=1, max_steps=10)
+    initial_radius = env._safe_radius()
 
-    _, toward_reward, _, toward_info = toward.step(MOVE_RIGHT)
-    _, away_reward, _, away_info = away.step(MOVE_LEFT)
+    for _ in range(5):
+        env.step(NOOP)
 
-    assert toward_info["reward_components"]["approach_enemy"] > away_info["reward_components"]["approach_enemy"]
-    assert toward_reward > away_reward
+    assert env._safe_radius() == initial_radius
 
 
 def test_aim_aligned_with_enemy_gives_positive_alignment_reward():
@@ -59,7 +54,23 @@ def test_aim_aligned_with_enemy_gives_positive_alignment_reward():
 
     _, _, _, info = env.step(AIM_RIGHT)
 
-    assert info["reward_components"]["aim_alignment"] > 0.0
+    assert info["reward_components"]["aim_bin_exact"] == pytest.approx(0.04)
+
+
+def test_circular_bin_distance_wraparound():
+    assert circular_bin_distance(0, 0, 16) == 0
+    assert circular_bin_distance(0, 1, 16) == 1
+    assert circular_bin_distance(0, 15, 16) == 1
+    assert circular_bin_distance(0, 8, 16) == 8
+
+
+def test_vec_to_aim_bin_matches_aim_bin_to_vec_convention():
+    assert vec_to_aim_bin({"x": 1.0, "y": 0.0}) == 0
+    assert vec_to_aim_bin({"x": -1.0, "y": 0.0}) == 8
+    assert vec_to_aim_bin({"x": 0.0, "y": 1.0}) == 4
+    assert vec_to_aim_bin({"x": 0.0, "y": -1.0}) == 12
+    for aim_bin in range(AIM_BINS):
+        assert vec_to_aim_bin(aim_bin_to_vec(aim_bin)) == aim_bin
 
 
 def test_aim_debug_points_to_enemy():
@@ -71,8 +82,35 @@ def test_aim_debug_points_to_enemy():
     aim_debug = info["aim_debug"]
     assert aim_debug["target_enemy_id"] == "enemy"
     assert aim_debug["ideal_aim_bin"] == 0
+    assert aim_debug["aim_bin_error"] == 0
     assert aim_debug["aim_alignment"] == pytest.approx(1.0)
+    assert aim_debug["is_exact_aim"] is True
+    assert aim_debug["is_near_aim"] is True
     assert aim_debug["is_aim_aligned"] is True
+
+
+def test_exact_aim_reward():
+    env = CPCEnv(seed=1, max_steps=4)
+    put_enemy_to_right(env, distance=120.0)
+
+    _, _, _, info = env.step(AIM_RIGHT)
+
+    components = info["reward_components"]
+    assert info["aim_debug"]["aim_bin_error"] == 0
+    assert components["aim_bin_exact"] == pytest.approx(0.04)
+    assert components["aim_bin_wrong"] == 0.0
+
+
+def test_neighbor_aim_reward():
+    env = CPCEnv(seed=1, max_steps=4)
+    put_enemy_to_right(env, distance=120.0)
+
+    _, _, _, info = env.step({"move": 0, "aim": 1, "fire": 0})
+
+    components = info["reward_components"]
+    assert info["aim_debug"]["aim_bin_error"] == 1
+    assert components["aim_bin_exact"] == 0.0
+    assert components["aim_bin_wrong"] == 0.0
 
 
 def test_wrong_aim_penalty():
@@ -82,70 +120,77 @@ def test_wrong_aim_penalty():
     _, _, _, info = env.step(AIM_LEFT)
 
     assert info["aim_debug"]["aim_alignment"] < 0.0
-    assert info["reward_components"]["bad_aim"] < 0.0
+    assert info["aim_debug"]["aim_bin_error"] >= 3
+    assert info["reward_components"]["aim_bin_wrong"] == 0.0
 
 
-def test_fire_in_range_and_aligned_gives_attack_intent_reward():
+def test_fire_requested_gets_no_direct_reward():
     env = CPCEnv(seed=1, max_steps=4)
     put_enemy_to_right(env)
 
     _, _, _, info = env.step(FIRE_RIGHT)
 
-    assert info["reward_components"]["attack_intent"] > 0.0
+    assert "attack_intent" not in info["reward_components"]
 
 
-def test_aligned_shot_bonus():
+def test_aim_shaping_is_small():
     env = CPCEnv(seed=1, max_steps=4)
     put_enemy_to_right(env, distance=120.0)
 
     _, _, _, info = env.step(FIRE_RIGHT)
 
     assert info["fire"]["shot_fired"] is True
-    assert info["reward_components"]["aligned_shot"] > 0.0
+    assert info["aim_debug"]["aim_bin_error"] == 0
+    assert info["reward_components"]["aim_bin_exact"] == pytest.approx(0.04)
+    assert info["reward_components"]["aim_bin_exact"] < 0.10
 
 
-def test_off_target_shot_penalty():
+def test_aim_bin_wrong_only_penalizes_fired_bad_shot():
+    env = CPCEnv(seed=1, max_steps=4)
+    put_enemy_to_right(env, distance=120.0)
+
+    _, _, _, info = env.step({"move": 0, "aim": 1, "fire": 1})
+
+    assert info["fire"]["shot_fired"] is True
+    assert info["aim_debug"]["aim_bin_error"] == 1
+    assert info["reward_components"]["aim_bin_wrong"] == 0.0
+
+
+def test_bad_fired_shot_gets_small_aim_penalty():
     env = CPCEnv(seed=1, max_steps=4)
     put_enemy_to_right(env, distance=120.0)
 
     _, _, _, info = env.step(FIRE_LEFT)
 
     assert info["fire"]["shot_fired"] is True
-    assert info["reward_components"]["off_target_shot"] < 0.0
+    assert info["aim_debug"]["aim_bin_error"] >= 2
+    assert info["reward_components"]["aim_bin_wrong"] == pytest.approx(-0.04)
 
 
-def test_outside_safe_zone_gives_zone_pressure_penalty():
+def test_fire_during_cooldown_does_not_get_shot_reward():
+    env = CPCEnv(seed=1, max_steps=4)
+    put_enemy_to_right(env, distance=120.0)
+
+    env.step(FIRE_RIGHT)
+    _, _, _, info = env.step(FIRE_RIGHT)
+
+    assert info["fire"]["fire_requested"] is True
+    assert info["fire"]["shot_fired"] is False
+    assert info["fire"]["fire_blocked_reason"] == "cooldown"
+    assert info["reward_components"]["aim_bin_wrong"] == 0.0
+    assert "attack_intent" not in info["reward_components"]
+
+
+def test_stage1_reward_has_no_zone_components():
     env = CPCEnv(seed=1, max_steps=4)
     env.state["self_pos"] = {"x": 0.0, "y": 0.0}
     env.state["enemy_pos"] = {"x": 100.0, "y": 0.0}
 
     _, _, _, info = env.step(NOOP)
 
-    assert info["zone_debug"]["outside_safe_zone"] is True
-    assert info["reward_components"]["zone_pressure"] <= -0.20
-
-
-def test_return_to_zone_reward():
-    env = CPCEnv(seed=1, max_steps=4)
-    env.state["self_pos"] = {"x": 0.0, "y": 0.0}
-    env.state["enemy_pos"] = {"x": 100.0, "y": 0.0}
-
-    _, _, _, info = env.step(MOVE_DOWN_RIGHT)
-
-    assert info["zone_debug"]["outside_safe_zone"] is True
-    assert info["zone_debug"]["move_toward_center"] > 0.5
-    assert info["reward_components"]["return_to_zone"] > 0.0
-
-
-def test_near_edge_outward_penalty():
-    env = CPCEnv(seed=1, max_steps=100)
-    env.state["self_pos"] = {"x": 880.0, "y": 500.0}
-    env.state["enemy_pos"] = {"x": 700.0, "y": 500.0}
-
-    _, _, _, info = env.step(MOVE_RIGHT)
-
-    assert info["zone_debug"]["outside_safe_zone"] is False
-    assert info["reward_components"]["near_edge_outward"] < 0.0
+    assert "zone_pressure" not in info["reward_components"]
+    assert "return_to_zone" not in info["reward_components"]
+    assert "near_edge_outward" not in info["reward_components"]
 
 
 def test_damage_dealt_reward_is_positive():
@@ -156,7 +201,7 @@ def test_damage_dealt_reward_is_positive():
     _, _, _, info = env.step(NOOP)
 
     assert info["damage_delta"]["enemy_hp"] > 0.0
-    assert info["reward_components"]["damage_dealt"] > 0.0
+    assert info["reward_components"]["damage_dealt_ratio"] == pytest.approx(0.10)
 
 
 def test_bullet_hit_reward_only_on_hit():
@@ -222,7 +267,7 @@ def test_bullet_expires_at_max_range():
 
     assert env.projectiles == []
     assert any(event["type"] == "bullet_expired" for event in info["bullet_events"])
-    assert info["reward_components"]["missed_shot"] < 0.0
+    assert info["reward_components"]["missed_shot"] == pytest.approx(-0.03)
 
 
 def test_bullet_hit_applies_damage():
@@ -342,6 +387,108 @@ def test_randomized_spawn_requires_non_right_aim():
     assert any(aim_bin != 0 for aim_bin in ideal_bins)
 
 
+def test_fixed_enemy_spawn_direction_is_deterministic():
+    env = CPCEnv(seed=1, max_steps=4, enemy_spawn_direction="left")
+
+    aim_debug = env._aim_debug(0, {"aimX": 1.0, "aimY": 0.0})
+
+    assert aim_debug["ideal_aim_bin"] == 8
+
+
+def test_randomized_enemy_spawn_uses_configured_direction_list():
+    ideal_bins = set()
+    for seed in range(8):
+        env = CPCEnv(
+            seed=seed,
+            max_steps=4,
+            randomize_enemy_spawn_direction=True,
+            enemy_spawn_directions=("left",),
+        )
+        ideal_bins.add(env._aim_debug(0, {"aimX": 1.0, "aimY": 0.0})["ideal_aim_bin"])
+
+    assert ideal_bins == {8}
+
+
+def test_metrics_include_aim_collapse_indicators():
+    env = CPCEnv(seed=1, max_steps=4)
+    put_enemy_to_right(env, distance=120.0)
+
+    env.step(FIRE_RIGHT)
+    summary = env.metrics.summary()
+
+    for key in (
+        "aim_bin_0_rate",
+        "aim_bin_entropy",
+        "ideal_aim_bin_distribution",
+        "exact_aim_match_rate",
+        "within_1_bin_aim_rate",
+        "bad_aim_rate",
+        "shot_exact_aim_rate",
+        "shot_near_aim_rate",
+        "shot_off_target_rate",
+        "bullet_hit_per_shot",
+        "shot_fired_count",
+    ):
+        assert key in summary
+
+
+def test_timeout_hp_lead():
+    env = CPCEnv(seed=1, max_steps=1)
+    put_enemy_to_right(env, distance=400.0)
+    env.metrics.damage_dealt = 20.0
+    env.metrics.damage_taken = 5.0
+
+    _, _, done, info = env.step(NOOP)
+
+    assert done is True
+    assert info["reward_components"]["timeout_hp_lead"] > 0.0
+
+
+def test_accuracy_bonus_requires_damage():
+    env = CPCEnv(seed=1, max_steps=1)
+    put_enemy_to_right(env, distance=400.0)
+    env.metrics.shot_fired_count = 3
+    env.metrics.bullet_hit_count = 3
+
+    _, _, done, info = env.step(NOOP)
+
+    assert done is True
+    assert info["reward_components"]["accuracy_bonus"] == 0.0
+
+
+def test_range_debug_and_reward_components():
+    env = CPCEnv(seed=1, max_steps=4)
+    put_enemy_to_right(env, distance=env.fire_range * 0.5)
+
+    _, _, _, info = env.step(NOOP)
+
+    assert info["range_debug"]["in_good_range"] is True
+    assert info["reward_components"]["good_range"] == pytest.approx(0.01)
+    assert info["reward_components"]["too_close"] == 0.0
+    assert info["reward_components"]["too_far"] == 0.0
+
+
+def test_stage1_metrics_exist():
+    env = CPCEnv(seed=1, max_steps=4)
+    put_enemy_to_right(env, distance=120.0)
+
+    env.step(FIRE_RIGHT)
+    summary = env.metrics.summary()
+
+    for key in (
+        "damage_trade_ratio",
+        "hit_ratio",
+        "bullet_hit_per_shot",
+        "missed_shot_rate",
+        "exact_aim_match_rate",
+        "avg_distance_to_enemy",
+        "good_range_rate",
+        "total_return",
+        "mean_step_reward",
+    ):
+        assert key in summary
+
+
 def test_projectile_moves_forward_and_damages_on_collision():
     env = CPCEnv(seed=1, max_steps=4)
     put_enemy_to_right(env, distance=120.0)
@@ -367,4 +514,4 @@ def test_damage_taken_penalty_is_negative():
     _, _, _, info = env.step(NOOP)
 
     assert info["damage_delta"]["self_hp"] > 0.0
-    assert info["reward_components"]["damage_taken"] < 0.0
+    assert info["reward_components"]["damage_taken_ratio"] < 0.0

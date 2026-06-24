@@ -69,6 +69,28 @@ def normalize_move(move_x: float, move_y: float) -> tuple[float, float]:
     return move_x / length, move_y / length
 
 
+def aim_bin_to_vec(aim_bin: int, num_bins: int = AIM_BINS) -> dict[str, float]:
+    theta = (2.0 * math.pi * int(aim_bin)) / int(num_bins)
+    return {"x": math.cos(theta), "y": math.sin(theta)}
+
+
+def vec_to_aim_bin(vec: Mapping[str, float], num_bins: int = AIM_BINS) -> int:
+    x = float(vec["x"])
+    y = float(vec["y"])
+    length = math.hypot(x, y)
+    if length <= 1e-6:
+        return 0
+    theta = math.atan2(y / length, x / length)
+    if theta < 0.0:
+        theta += 2.0 * math.pi
+    return int(round((theta / (2.0 * math.pi)) * int(num_bins))) % int(num_bins)
+
+
+def circular_bin_distance(a: int, b: int, num_bins: int) -> int:
+    distance = abs(int(a) - int(b)) % int(num_bins)
+    return min(distance, int(num_bins) - distance)
+
+
 def decode_action(action: Mapping[str, int]) -> EngineAction:
     move = int(action["move"])
     aim = int(action["aim"])
@@ -82,12 +104,12 @@ def decode_action(action: Mapping[str, int]) -> EngineAction:
         raise ValueError(f"fire must be 0 or 1, got {fire}")
 
     move_x, move_y = normalize_move(*MOVE_VECTORS[move])
-    theta = (2.0 * math.pi * aim) / AIM_BINS
+    aim_vec = aim_bin_to_vec(aim, AIM_BINS)
     return {
         "moveX": move_x,
         "moveY": move_y,
-        "aimX": math.cos(theta),
-        "aimY": math.sin(theta),
+        "aimX": aim_vec["x"],
+        "aimY": aim_vec["y"],
         "fire": fire,
     }
 

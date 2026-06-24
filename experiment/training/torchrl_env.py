@@ -18,25 +18,23 @@ else:
 
 
 REWARD_COMPONENT_KEYS = (
-    "damage_dealt",
+    "damage_dealt_ratio",
+    "damage_taken_ratio",
     "bullet_hit",
-    "damage_taken",
+    "missed_shot",
+    "aim_bin_exact",
+    "aim_bin_wrong",
+    "good_range",
+    "too_close",
+    "too_far",
+    "kill",
     "death",
-    "win",
-    "survival",
-    "approach_enemy",
-    "aim_alignment",
-    "bad_aim",
-    "attack_intent",
-    "aligned_shot",
-    "off_target_shot",
+    "timeout_hp_lead",
+    "accuracy_bonus",
     "zone_pressure",
     "return_to_zone",
     "move_deeper_outside_zone",
     "near_edge_outward",
-    "shot_fired",
-    "wasted_fire",
-    "missed_shot",
 )
 
 METRIC_KEYS = (
@@ -45,9 +43,38 @@ METRIC_KEYS = (
     "teammate_under_pressure_response",
     "damage_dealt",
     "damage_taken",
+    "damage_dealt_ratio",
+    "damage_taken_ratio",
+    "damage_trade_ratio",
+    "enemy_hp_remaining_ratio",
+    "self_hp_remaining_ratio",
+    "kill_rate",
+    "enemy_dead",
+    "self_dead",
+    "survival_steps",
     "mean_aim_alignment",
+    "aim_bin_0_rate",
+    "aim_bin_entropy",
+    "exact_aim_match_rate",
+    "within_1_bin_aim_rate",
+    "bad_aim_rate",
+    "shot_exact_aim_rate",
+    "shot_near_aim_rate",
+    "shot_off_target_rate",
+    "bullet_hit_per_shot",
+    "fire_requested_count",
+    "shot_fired_count",
     "off_target_shot_count",
     "bullet_hit_count",
+    "missed_shot_count",
+    "hit_ratio",
+    "missed_shot_rate",
+    "avg_distance_to_enemy",
+    "good_range_rate",
+    "too_close_rate",
+    "too_far_rate",
+    "total_return",
+    "mean_step_reward",
     "outside_safe_zone_rate",
     "near_edge_outward_count",
 )
@@ -70,6 +97,16 @@ class TorchRLCPCEnv(EnvBase):
         device: torch.device | str = "cpu",
         env: CPCEnv | None = None,
         randomize_enemy_spawn_direction: bool = False,
+        enemy_spawn_directions: list[str] | tuple[str, ...] | None = None,
+        enemy_spawn_direction: str | None = None,
+        stage: str = "local_combat",
+        shrink_safe_zone: bool = False,
+        use_zone_reward: bool = False,
+        fire_interval_steps: int | None = None,
+        bullet_speed: float | None = None,
+        bullet_range: float | None = None,
+        bullet_damage: float | None = None,
+        bullet_hit_radius: float | None = None,
     ):
         self.seed = int(seed)
         self.rng = random.Random(self.seed)
@@ -77,6 +114,16 @@ class TorchRLCPCEnv(EnvBase):
             seed=self.seed,
             max_steps=max_steps,
             randomize_enemy_spawn_direction=randomize_enemy_spawn_direction,
+            enemy_spawn_directions=enemy_spawn_directions,
+            enemy_spawn_direction=enemy_spawn_direction,
+            stage=stage,
+            shrink_safe_zone=shrink_safe_zone,
+            use_zone_reward=use_zone_reward,
+            fire_interval_steps=fire_interval_steps,
+            bullet_speed=bullet_speed,
+            bullet_range=bullet_range,
+            bullet_damage=bullet_damage,
+            bullet_hit_radius=bullet_hit_radius,
         )
         device = torch.device(device)
         super().__init__(device=device, batch_size=torch.Size([]))
@@ -100,7 +147,7 @@ class TorchRLCPCEnv(EnvBase):
         return self.seed
 
     def _reset(self, tensordict: TensorDict | None = None) -> TensorDict:
-        seed = self.seed if tensordict is None else self._seed_from_tensordict(tensordict)
+        seed = None if tensordict is None else self._seed_from_tensordict(tensordict)
         obs = self.cpc_env.reset(seed=seed)
         return self._td_from_obs(
             obs,

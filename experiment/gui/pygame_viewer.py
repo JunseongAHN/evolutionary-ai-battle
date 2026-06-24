@@ -44,7 +44,7 @@ class PygameCPCViewer:
         self.surface.fill(colors.BACKGROUND)
         map_area = (self.width - self.panel_width, self.height)
         map_info = _map_info(env_state)
-        self._draw_danger_overlay(env_state, map_info, map_area)
+        self._draw_arena(env_state, map_info, map_area)
         pygame.draw.rect(self.surface, (72, 78, 92), map_rect(map_info, map_area, self.padding), width=2)
         self._draw_projectiles(env_state, map_info, map_area)
         self._draw_agents(env_state, map_info, map_area, step_record)
@@ -56,7 +56,9 @@ class PygameCPCViewer:
     def close(self) -> None:
         self.pygame.quit()
 
-    def _draw_danger_overlay(self, env_state: Mapping[str, Any], map_info: Mapping[str, Any], map_area: tuple[int, int]) -> None:
+    def _draw_arena(self, env_state: Mapping[str, Any], map_info: Mapping[str, Any], map_area: tuple[int, int]) -> None:
+        if env_state.get("stage") == "local_combat" or map_info.get("use_zone_reward") is False:
+            return
         safe_radius = map_info.get("safe_radius")
         if safe_radius is None:
             return
@@ -119,6 +121,10 @@ class PygameCPCViewer:
                     self.pygame.draw.line(self.surface, colors.TEXT, center, move_end, width=2)
                 if float(action.get("fire", 0.0)) >= 1.0:
                     self.pygame.draw.circle(self.surface, colors.FIRE, center, radius + 7, width=2)
+                status = _aim_status(step_record, aim_debug)
+                if status:
+                    label = self.small_font.render(status, True, colors.FIRE if status == "EXACT AIM" else colors.WARNING)
+                    self.surface.blit(label, (center[0] - label.get_width() // 2, center[1] - 45))
 
     def _draw_hp_bar(self, center: tuple[int, int], hp: float, y_offset: int) -> None:
         hp_width = 44
@@ -184,6 +190,7 @@ def _map_info(env_state: Mapping[str, Any]) -> dict[str, Any]:
         map_info["height"] = env_state.get("height", 1000.0)
     map_info.setdefault("center", safe_zone.get("center", {"x": 500.0, "y": 500.0}))
     map_info.setdefault("safe_radius", safe_zone.get("radius", state.get("safe_radius")))
+    map_info.setdefault("use_zone_reward", env_state.get("map", {}).get("use_zone_reward"))
     map_info.setdefault("fire_range", env_state.get("combat", {}).get("fire_range", 260.0))
     return map_info
 
@@ -257,6 +264,7 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
     metrics = info.get("metrics", env_state.get("metrics", {}))
     aim_debug = info.get("aim_debug", env_state.get("aim_debug", {}))
     zone_debug = info.get("zone_debug", env_state.get("zone_debug", {}))
+    range_debug = info.get("range_debug", env_state.get("range_debug", {}))
     action = _decoded_action(step_record)
     weapon = env_state.get("weapon", {})
     lines = [
@@ -269,16 +277,44 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
         f"requested: {bool(fire_info.get('fire_requested', float(action.get('fire', 0.0)) >= 1.0))}",
         f"shot fired: {bool(fire_info.get('shot_fired', False))}",
         f"cooldown: {int(fire_info.get('cooldown_remaining_steps_after', weapon.get('cooldown_remaining_steps', 0)))}",
+        f"aim bin: {aim_debug.get('aim_bin', '-')}",
+        f"ideal bin: {aim_debug.get('ideal_aim_bin', '-')}",
+        f"bin error: {aim_debug.get('aim_bin_error', '-')}",
         f"align: {float(aim_debug.get('aim_alignment', 0.0)):.2f}",
         f"angle err: {float(aim_debug.get('angle_error_deg', 0.0)):.1f}",
-        f"outside: {bool(zone_debug.get('outside_safe_zone', False))}",
-        "",
-        "reward components",
+        f"range: {float(range_debug.get('distance_to_enemy', 0.0)):.1f}",
+        f"range ok: {bool(range_debug.get('in_good_range', False))}",
+        f"trade: {float(metrics.get('damage_trade_ratio', 0.0)):.3f}",
     ]
+    manual_step = env_state.get("manual_step", {})
+    if manual_step:
+        lines.extend(
+            [
+                f"manual: {int(manual_step.get('index', 0))}/{int(manual_step.get('count', 0))}",
+                "f next / b back",
+            ]
+        )
+    lines.extend(["", "reward components"])
     for key, value in list(components.items())[:8]:
         lines.append(f"{key}: {float(value):.3f}")
     lines.extend(["", "metrics"])
-    for key in ("avg_ally_distance", "isolation_rate", "damage_dealt", "damage_taken"):
+    for key in ("damage_dealt_ratio", "damage_taken_ratio", "hit_ratio", "bullet_hit_per_shot"):
         if key in metrics:
             lines.append(f"{key}: {float(metrics[key]):.3f}")
     return lines
+
+
+def _aim_status(
+    step_record: Mapping[str, Any] | None,
+    aim_debug: Mapping[str, Any],
+) -> str:
+    env_record = (step_record or {}).get("env", {})
+    info = env_record.get("info", {})
+    fire_info = info.get("fire", {})
+    shot_fired = bool(fire_info.get("shot_fired", info.get("shot_fired", False)))
+    aim_bin_error = int(aim_debug.get("aim_bin_error", 0) or 0)
+    if shot_fired and aim_bin_error >= 2:
+        return "OFF TARGET"
+    if aim_bin_error == 0:
+        return "EXACT AIM"
+    return ""

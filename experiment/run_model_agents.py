@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from experiment.gameplay_serializer import save_gameplay_result, to_jsonable
+    from experiment.gameplay_serializer import POLICY_DEBUG_MODES, SAVE_RESULT_MODES, save_gameplay_result, save_report, to_jsonable
     from experiment.policy_agent import PPOPolicyAgent
     from experiment.training.cpc_actions import decode_action
     from experiment.training.cpc_env import CPCEnv
@@ -17,7 +17,7 @@ except ModuleNotFoundError:
     for path in (EXPERIMENT_ROOT, REPO_ROOT):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
-    from experiment.gameplay_serializer import save_gameplay_result, to_jsonable
+    from experiment.gameplay_serializer import POLICY_DEBUG_MODES, SAVE_RESULT_MODES, save_gameplay_result, save_report, to_jsonable
     from experiment.policy_agent import PPOPolicyAgent
     from experiment.training.cpc_actions import decode_action
     from experiment.training.cpc_env import CPCEnv
@@ -34,6 +34,13 @@ def run_model_gameplay(
     render_pygame: bool = False,
     render_fps: int = 10,
     pause_on_end: bool = False,
+    manual_step: bool = False,
+    save_result_mode: str = "compact",
+    policy_debug_mode: str = "none",
+    include_policy_debug: bool = False,
+    include_state_before: bool = False,
+    include_observations: bool = False,
+    include_full_state: bool = False,
 ) -> dict[str, Any]:
     if checkpoint_b is not None and not _env_supports_two_agent_control():
         raise NotImplementedError(
@@ -52,9 +59,20 @@ def run_model_gameplay(
         render_pygame=render_pygame,
         render_fps=render_fps,
         pause_on_end=pause_on_end,
+        manual_step=manual_step,
     )
     if save_result:
-        save_gameplay_result(result, save_result)
+        save_gameplay_result(
+            result,
+            save_result,
+            mode=save_result_mode,
+            policy_debug_mode=policy_debug_mode,
+            include_policy_debug=include_policy_debug,
+            include_state_before=include_state_before,
+            include_observations=include_observations,
+            include_full_state=include_full_state,
+        )
+        _print_save_report(save_report(result, save_result, save_result_mode))
     return result
 
 
@@ -88,12 +106,13 @@ def _run_single_agent_gameplay(
     render_pygame: bool = False,
     render_fps: int = 10,
     pause_on_end: bool = False,
+    manual_step: bool = False,
 ) -> dict[str, Any]:
     episodes = max(1, int(episodes))
     max_steps = max(1, int(max_steps))
     result_episodes = []
     stopped_early = False
-    viewer = _create_viewer(render_pygame, render_fps)
+    viewer = _create_viewer(render_pygame or manual_step, render_fps)
 
     try:
         for episode_index in range(episodes):
@@ -106,6 +125,7 @@ def _run_single_agent_gameplay(
                 max_steps=max_steps,
                 deterministic=deterministic,
                 viewer=viewer,
+                manual_step=manual_step,
             )
             result_episodes.append(episode_result)
             stopped_early = episode_stopped_early
@@ -129,6 +149,7 @@ def _run_single_agent_gameplay(
                 "deterministic": deterministic,
                 "device": device,
                 "render_pygame": render_pygame,
+                "manual_step": manual_step,
             },
             "stopped_early": stopped_early,
             "episodes": result_episodes,
@@ -144,6 +165,7 @@ def _run_single_episode(
     max_steps: int,
     deterministic: bool,
     viewer: Any | None,
+    manual_step: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     del checkpoint_a
     env = CPCEnv(seed=episode_index, max_steps=max_steps)
@@ -165,6 +187,7 @@ def _run_single_episode(
         env_state = env.get_debug_state()
         env_state["bullet_events"] = info.get("bullet_events", [])
         env_state["aim_debug"] = info.get("aim_debug", {})
+        env_state["range_debug"] = info.get("range_debug", {})
         env_state["zone_debug"] = info.get("zone_debug", {})
 
         step_record = {
@@ -194,6 +217,7 @@ def _run_single_episode(
                     "damage_delta": info.get("damage_delta", {}),
                     "safe_zone": info.get("safe_zone", {}),
                     "aim_debug": info.get("aim_debug", {}),
+                    "range_debug": info.get("range_debug", {}),
                     "zone_debug": info.get("zone_debug", {}),
                     "fire": info.get("fire", {}),
                     "fire_selected": info.get("fire_selected", False),
@@ -206,9 +230,14 @@ def _run_single_episode(
             },
         }
         steps.append(step_record)
-        if viewer is not None and not viewer.render_step(env_state, step_record):
-            stopped_early = True
-            break
+        if viewer is not None:
+            if manual_step:
+                if not _manual_step_navigation(viewer, steps, len(steps) - 1):
+                    stopped_early = True
+                    break
+            elif not viewer.render_step(env_state, step_record):
+                stopped_early = True
+                break
         observation = next_observation
 
     return (
@@ -239,6 +268,48 @@ def _pause_viewer_on_end(viewer: Any, step_record: dict[str, Any] | None) -> Non
     env_state = (step_record or {}).get("env", {}).get("state", {})
     while viewer.render_step(env_state, step_record):
         pass
+
+
+def _manual_step_navigation(viewer: Any, steps: list[dict[str, Any]], index: int) -> bool:
+    index = max(0, min(index, len(steps) - 1))
+    while True:
+        step_record = steps[index]
+        env_state = dict(step_record.get("env", {}).get("state", {}))
+        env_state["manual_step"] = {
+            "index": index + 1,
+            "count": len(steps),
+            "at_latest": index == len(steps) - 1,
+        }
+        if not viewer.render_step(env_state, step_record, handle_events=False):
+            return False
+
+        action = _wait_for_manual_step_key(viewer)
+        if action == "quit":
+            return False
+        if action == "back":
+            index = max(0, index - 1)
+            continue
+        if index < len(steps) - 1:
+            index += 1
+            continue
+        return True
+
+
+def _wait_for_manual_step_key(viewer: Any) -> str:
+    pygame = viewer.pygame
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return "quit"
+            if event.type != pygame.KEYDOWN:
+                continue
+            if event.key in (pygame.K_ESCAPE, pygame.K_q):
+                return "quit"
+            if event.key == pygame.K_b:
+                return "back"
+            if event.key == pygame.K_f:
+                return "forward"
+        viewer.clock.tick(max(1, viewer.fps))
 
 
 def _agent_action_debug(agent: Any, observation: dict[str, Any], *, deterministic: bool) -> dict[str, Any]:
@@ -276,9 +347,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--export")
     parser.add_argument("--save-result")
+    parser.add_argument("--save-result-mode", choices=SAVE_RESULT_MODES, default="compact")
+    parser.add_argument("--include-policy-debug", action="store_true")
+    parser.add_argument("--policy-debug-mode", choices=POLICY_DEBUG_MODES, default="none")
+    parser.add_argument("--include-state-before", action="store_true")
+    parser.add_argument("--include-observations", action="store_true")
+    parser.add_argument("--include-full-state", action="store_true")
     parser.add_argument("--render-pygame", action="store_true")
     parser.add_argument("--render-fps", type=int, default=10)
     parser.add_argument("--pause-on-end", action="store_true")
+    parser.add_argument("--manual-step", "--manual_step", action="store_true")
     return parser
 
 
@@ -296,8 +374,37 @@ def main() -> None:
         render_pygame=args.render_pygame,
         render_fps=args.render_fps,
         pause_on_end=args.pause_on_end,
+        manual_step=args.manual_step,
+        save_result_mode=args.save_result_mode,
+        policy_debug_mode=args.policy_debug_mode,
+        include_policy_debug=args.include_policy_debug,
+        include_state_before=args.include_state_before,
+        include_observations=args.include_observations,
+        include_full_state=args.include_full_state,
     )
     print(json.dumps(result, indent=2))
+
+
+def _print_save_report(report: dict[str, Any]) -> None:
+    print(
+        "\n".join(
+            [
+                f"Saved {report['mode']} gameplay result:",
+                f"path: {report['path']}",
+                f"mode: {report['mode']}",
+                f"episodes: {report['episodes']}",
+                f"steps: {report['steps']}",
+                f"size_kb: {report['size_kb']}",
+                f"final_return: {report['final_return']}",
+                f"damage_dealt: {report['damage_dealt']}",
+                f"damage_taken: {report['damage_taken']}",
+                f"damage_trade_ratio: {report['damage_trade_ratio']}",
+                f"hit_ratio: {report['hit_ratio']}",
+                f"bullet_hit_count: {report['bullet_hit_count']}",
+                f"shot_fired_count: {report['shot_fired_count']}",
+            ]
+        )
+    )
 
 
 if __name__ == "__main__":

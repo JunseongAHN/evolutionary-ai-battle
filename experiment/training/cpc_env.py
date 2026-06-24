@@ -6,10 +6,26 @@ from copy import deepcopy
 from typing import Any
 
 if __package__:
-    from .cpc_actions import AIM_BINS, RawAction, decode_action, random_action
+    from .cpc_actions import (
+        AIM_BINS,
+        RawAction,
+        aim_bin_to_vec,
+        circular_bin_distance,
+        decode_action,
+        random_action,
+        vec_to_aim_bin,
+    )
     from .cpc_metrics import CpcMetrics
 else:
-    from cpc_actions import AIM_BINS, RawAction, decode_action, random_action
+    from cpc_actions import (
+        AIM_BINS,
+        RawAction,
+        aim_bin_to_vec,
+        circular_bin_distance,
+        decode_action,
+        random_action,
+        vec_to_aim_bin,
+    )
     from cpc_metrics import CpcMetrics
 
 
@@ -34,54 +50,106 @@ def angle_between(a: Vec2, b: Vec2) -> float:
     return math.degrees(math.acos(value))
 
 
-def aim_bin_to_vec(aim_bin: int, num_bins: int = AIM_BINS) -> Vec2:
-    theta = (2.0 * math.pi * int(aim_bin)) / int(num_bins)
-    return {"x": math.cos(theta), "y": math.sin(theta)}
-
-
-def vec_to_aim_bin(vec: Vec2, num_bins: int = AIM_BINS) -> int:
-    normalized = normalize_vec(vec)
-    if normalized["x"] == 0.0 and normalized["y"] == 0.0:
-        return 0
-    theta = math.atan2(normalized["y"], normalized["x"])
-    if theta < 0.0:
-        theta += 2.0 * math.pi
-    return int(round((theta / (2.0 * math.pi)) * int(num_bins))) % int(num_bins)
-
-
 class CPCEnv:
+    stage = "local_combat"
     width = 1000.0
     height = 1000.0
     max_hp = 100.0
     move_speed = 35.0
-    fire_range = 260.0
+    fire_range = 280.0
     fire_alignment = 0.65
     fire_interval_steps = 5
     projectile_speed = 140.0
-    projectile_radius = 8.0
+    projectile_radius = 12.0
     damage = 10.0
     enemy_damage = 2.0
     enemy_move_speed = 18.0
     survival_reward = 0.001
     center = {"x": 500.0, "y": 500.0}
     safe_radius_start = 420.0
-    safe_radius_end = 120.0
+    safe_radius_end = 420.0
+    shrink_safe_zone = False
+    use_zone_reward = False
     aim_alignment_threshold = 0.75
-    aim_alignment_weight = 0.12
-    bad_aim_penalty = 0.05
-    aligned_shot_bonus = 0.08
-    off_target_shot_penalty = 0.08
-    bullet_hit_bonus = 0.20
+    damage_dealt_ratio_weight = 1.0
+    damage_taken_ratio_weight = -1.2
+    bullet_hit_bonus = 0.05
     missed_shot_penalty = 0.03
+    aim_bin_exact_bonus = 0.04
+    aim_bin_wrong_penalty = 0.04
+    good_range_bonus = 0.01
+    too_close_penalty = 0.03
+    too_far_penalty = 0.01
+    kill_bonus = 1.0
+    death_penalty = 1.0
+    timeout_hp_lead_weight = 0.5
+    accuracy_bonus_weight = 0.2
+    aim_alignment_weight = 0.0
+    aim_bin_neighbor_bonus = 0.0
+    bad_aim_penalty = 0.12
+    attack_intent_bonus = 0.02
+    aligned_shot_bonus = 0.0
+    near_aligned_shot_bonus = 0.0
+    off_target_shot_penalty = 0.0
     zone_pressure_penalty = 0.20
     return_to_zone_bonus = 0.06
     move_deeper_outside_zone_penalty = 0.08
     near_edge_outward_penalty = 0.04
+    default_enemy_spawn_directions = (
+        "right",
+        "left",
+        "up",
+        "down",
+        "upper_right",
+        "lower_right",
+        "upper_left",
+        "lower_left",
+    )
+    enemy_spawn_direction_angles = {
+        "right": 0.0,
+        "left": math.pi,
+        "up": -math.pi / 2.0,
+        "down": math.pi / 2.0,
+        "upper_right": -math.pi / 4.0,
+        "lower_right": math.pi / 4.0,
+        "upper_left": -3.0 * math.pi / 4.0,
+        "lower_left": 3.0 * math.pi / 4.0,
+    }
 
-    def __init__(self, seed: int = 0, max_steps: int = 50, randomize_enemy_spawn_direction: bool = False):
+    def __init__(
+        self,
+        seed: int = 0,
+        max_steps: int = 50,
+        randomize_enemy_spawn_direction: bool = False,
+        enemy_spawn_directions: list[str] | tuple[str, ...] | None = None,
+        enemy_spawn_direction: str | None = None,
+        stage: str = "local_combat",
+        shrink_safe_zone: bool = False,
+        use_zone_reward: bool = False,
+        fire_interval_steps: int | None = None,
+        bullet_speed: float | None = None,
+        bullet_range: float | None = None,
+        bullet_damage: float | None = None,
+        bullet_hit_radius: float | None = None,
+    ):
         self.seed = seed
         self.max_steps = max_steps
+        self.stage = stage
+        self.shrink_safe_zone = bool(shrink_safe_zone)
+        self.use_zone_reward = bool(use_zone_reward)
+        if fire_interval_steps is not None:
+            self.fire_interval_steps = int(fire_interval_steps)
+        if bullet_speed is not None:
+            self.projectile_speed = float(bullet_speed)
+        if bullet_range is not None:
+            self.fire_range = float(bullet_range)
+        if bullet_damage is not None:
+            self.damage = float(bullet_damage)
+        if bullet_hit_radius is not None:
+            self.projectile_radius = float(bullet_hit_radius)
         self.randomize_enemy_spawn_direction = bool(randomize_enemy_spawn_direction)
+        self.enemy_spawn_directions = self._validate_spawn_directions(enemy_spawn_directions)
+        self.enemy_spawn_direction = self._validate_spawn_direction(enemy_spawn_direction)
         self.rng = random.Random(seed)
         self.metrics = CpcMetrics()
         self.trajectory: list[dict[str, Any]] = []
@@ -148,6 +216,7 @@ class CPCEnv:
         ally_distance = self._distance(self.state["self_pos"], self.state["ally_pos"])
         enemy_distance = self._distance(self.state["self_pos"], self.state["enemy_pos"])
         moved_toward_ally = ally_distance < previous_ally_distance
+        range_debug = self._range_debug(enemy_distance)
         reward_components = self._reward_components(
             decoded=decoded,
             previous_enemy_distance=previous_enemy_distance,
@@ -158,9 +227,11 @@ class CPCEnv:
             previous_enemy_hp=previous_enemy_hp,
             previous_self_hp=previous_self_hp,
             fire_requested=fire_requested,
+            can_fire=cooldown_before <= 0,
             bullet_spawned=bullet_spawned,
             fire_blocked_reason=fire_blocked_reason,
             bullet_events=bullet_events,
+            range_debug=range_debug,
         )
         aim_debug = self._aim_debug(raw_action["aim"], decoded)
         zone_debug = self._zone_debug(decoded)
@@ -176,11 +247,26 @@ class CPCEnv:
             fired_under_pressure=bool(decoded["fire"]),
             damage_dealt=damage_dealt,
             damage_taken=damage_taken,
+            enemy_hp=float(self.state["enemy_hp"]),
+            self_hp=float(self.state["self_hp"]),
+            reward=reward,
+            reward_components=reward_components,
+            fire_requested=fire_requested,
             aim_alignment=aim_debug["aim_alignment"],
-            off_target_shot=bullet_spawned and not aim_debug["is_aim_aligned"],
+            aim_bin=int(aim_debug["aim_bin"]),
+            ideal_aim_bin=int(aim_debug["ideal_aim_bin"]),
+            aim_bin_error=int(aim_debug["aim_bin_error"]),
+            shot_fired=bullet_spawned,
+            off_target_shot=bullet_spawned and int(aim_debug["aim_bin_error"]) >= 2,
             bullet_hit=any(event.get("type") == "bullet_hit" for event in bullet_events),
+            missed_shot=any(event.get("type") == "bullet_expired" for event in bullet_events)
+            and not any(event.get("type") == "bullet_hit" for event in bullet_events),
+            distance_to_enemy=enemy_distance,
+            in_good_range=bool(range_debug["in_good_range"]),
+            too_close=bool(range_debug["too_close"]),
+            too_far=bool(range_debug["too_far"]),
             outside_safe_zone=zone_debug["outside_safe_zone"],
-            near_edge_outward=reward_components["near_edge_outward"] < 0.0,
+            near_edge_outward=reward_components.get("near_edge_outward", 0.0) < 0.0,
         )
         info = {
             "decoded_action": decoded,
@@ -198,6 +284,7 @@ class CPCEnv:
                 "outside": zone_debug["outside_safe_zone"],
             },
             "aim_debug": aim_debug,
+            "range_debug": range_debug,
             "zone_debug": zone_debug,
             "fire": {
                 "fire_requested": fire_requested,
@@ -262,6 +349,7 @@ class CPCEnv:
 
     def get_debug_state(self) -> dict[str, Any]:
         return {
+            "stage": self.stage,
             "step": self.step_count,
             "step_count": self.step_count,
             "max_steps": self.max_steps,
@@ -270,9 +358,12 @@ class CPCEnv:
                 "height": self.height,
                 "center": dict(self.center),
                 "safe_radius": self._safe_radius(),
+                "shrink_safe_zone": self.shrink_safe_zone,
+                "use_zone_reward": self.use_zone_reward,
             },
             "combat": {
                 "fire_range": self.fire_range,
+                "bullet_range": self.fire_range,
                 "fire_alignment": self.fire_alignment,
                 "projectile_speed": self.projectile_speed,
                 "projectile_radius": self.projectile_radius,
@@ -315,6 +406,7 @@ class CPCEnv:
                 "outside": self._distance(self.state["self_pos"], self.center) > self._safe_radius(),
             },
             "aim_debug": deepcopy(self.last_aim_debug),
+            "range_debug": self._range_debug(self._distance(self.state["self_pos"], self.state["enemy_pos"])),
             "zone_debug": deepcopy(self.last_zone_debug),
             "metrics": self.metrics.summary(),
         }
@@ -334,7 +426,7 @@ class CPCEnv:
             return
 
         center_distance = self._distance(enemy, self.center)
-        target_pos = self.center if center_distance > self._safe_radius() else target
+        target_pos = self.center if self.stage != "local_combat" and center_distance > self._safe_radius() else target
         dx = target_pos["x"] - enemy["x"]
         dy = target_pos["y"] - enemy["y"]
         length = max(math.hypot(dx, dy), 1e-6)
@@ -496,47 +588,66 @@ class CPCEnv:
         previous_enemy_hp: float,
         previous_self_hp: float,
         fire_requested: bool,
+        can_fire: bool,
         bullet_spawned: bool,
         fire_blocked_reason: str | None,
         bullet_events: list[dict[str, Any]],
+        range_debug: dict[str, Any],
     ) -> dict[str, float]:
-        del ally_under_pressure
+        del ally_under_pressure, previous_enemy_distance, enemy_distance, fire_requested, can_fire, fire_blocked_reason
         aim_debug = self._aim_debug(self._aim_bin_from_decoded(decoded), decoded)
-        zone_debug = self._zone_debug(decoded)
-        alignment = float(aim_debug["aim_alignment"])
-        in_range = enemy_distance <= self.fire_range
-        relevant_range = enemy_distance <= self.fire_range * 1.25
-        outside_safe = bool(zone_debug["outside_safe_zone"])
+        aim_bin_error = int(aim_debug["aim_bin_error"])
         self_dead = previous_self_hp > 0.0 and float(self.state["self_hp"]) <= 0.0
         enemy_dead = previous_enemy_hp > 0.0 and float(self.state["enemy_hp"]) <= 0.0
         bullet_expired = any(event.get("type") == "bullet_expired" for event in bullet_events)
         bullet_hit = any(event.get("type") == "bullet_hit" for event in bullet_events)
         shot_fired = bool(bullet_spawned)
-        move_toward_center = float(zone_debug["move_toward_center"])
-        edge_ratio = float(zone_debug["distance_to_center"]) / max(1.0, float(zone_debug["safe_radius"]))
-        return {
-            "damage_dealt": damage_dealt * 0.10,
+        enemy_hp_loss_ratio = float(damage_dealt) / max(1.0, self.max_hp)
+        self_hp_loss_ratio = float(damage_taken) / max(1.0, self.max_hp)
+        timeout = self.step_count >= self.max_steps and not enemy_dead and not self_dead
+        summary = self.metrics.summary()
+        total_damage_dealt_ratio = (float(summary.get("damage_dealt", 0.0)) + float(damage_dealt)) / max(1.0, self.max_hp)
+        total_damage_taken_ratio = (float(summary.get("damage_taken", 0.0)) + float(damage_taken)) / max(1.0, self.max_hp)
+        prior_shots = int(float(summary.get("shot_fired_count", 0.0)))
+        prior_hits = int(float(summary.get("bullet_hit_count", 0.0)))
+        hit_ratio = (prior_hits + int(bullet_hit)) / max(prior_shots + int(shot_fired), 1)
+        components = {
+            "damage_dealt_ratio": self.damage_dealt_ratio_weight * enemy_hp_loss_ratio,
+            "damage_taken_ratio": self.damage_taken_ratio_weight * self_hp_loss_ratio,
             "bullet_hit": self.bullet_hit_bonus if bullet_hit else 0.0,
-            "damage_taken": -damage_taken * 0.05,
-            "death": -1.0 if self_dead else 0.0,
-            "win": 2.0 if enemy_dead else 0.0,
-            "survival": self.survival_reward if float(self.state["self_hp"]) > 0.0 else 0.0,
-            "approach_enemy": 0.03 if enemy_distance < previous_enemy_distance else -0.02,
-            "aim_alignment": self.aim_alignment_weight * max(0.0, alignment),
-            "bad_aim": -self.bad_aim_penalty if relevant_range and alignment < 0.3 else 0.0,
-            "attack_intent": 0.05 if int(decoded["fire"]) == 1 and in_range and alignment >= self.fire_alignment else 0.0,
-            "aligned_shot": self.aligned_shot_bonus if shot_fired and bool(aim_debug["is_aim_aligned"]) else 0.0,
-            "off_target_shot": -self.off_target_shot_penalty if shot_fired and not bool(aim_debug["is_aim_aligned"]) else 0.0,
-            "zone_pressure": -self.zone_pressure_penalty if outside_safe else 0.0,
-            "return_to_zone": self.return_to_zone_bonus if outside_safe and move_toward_center > 0.5 else 0.0,
-            "move_deeper_outside_zone": (
-                -self.move_deeper_outside_zone_penalty if outside_safe and move_toward_center < -0.2 else 0.0
-            ),
-            "near_edge_outward": -self.near_edge_outward_penalty if edge_ratio > 0.90 and move_toward_center < 0.0 else 0.0,
-            "shot_fired": 0.0 if bullet_spawned else 0.0,
-            "wasted_fire": -0.01 if fire_requested and not bullet_spawned and fire_blocked_reason != "cooldown" else 0.0,
             "missed_shot": -self.missed_shot_penalty if bullet_expired and not bullet_hit else 0.0,
+            "aim_bin_exact": self.aim_bin_exact_bonus if aim_bin_error == 0 else 0.0,
+            "aim_bin_wrong": -self.aim_bin_wrong_penalty if shot_fired and aim_bin_error >= 2 else 0.0,
+            "good_range": self.good_range_bonus if range_debug["in_good_range"] else 0.0,
+            "too_close": -self.too_close_penalty if range_debug["too_close"] else 0.0,
+            "too_far": -self.too_far_penalty if range_debug["too_far"] else 0.0,
+            "kill": self.kill_bonus if enemy_dead else 0.0,
+            "death": -self.death_penalty if self_dead else 0.0,
+            "timeout_hp_lead": (
+                self.timeout_hp_lead_weight * (total_damage_dealt_ratio - total_damage_taken_ratio) if timeout else 0.0
+            ),
+            "accuracy_bonus": (
+                self.accuracy_bonus_weight * hit_ratio * min(total_damage_dealt_ratio, 1.0) if timeout else 0.0
+            ),
         }
+        if self.use_zone_reward:
+            zone_debug = self._zone_debug(decoded)
+            outside_safe = bool(zone_debug["outside_safe_zone"])
+            move_toward_center = float(zone_debug["move_toward_center"])
+            edge_ratio = float(zone_debug["distance_to_center"]) / max(1.0, float(zone_debug["safe_radius"]))
+            components.update(
+                {
+                    "zone_pressure": -self.zone_pressure_penalty if outside_safe else 0.0,
+                    "return_to_zone": self.return_to_zone_bonus if outside_safe and move_toward_center > 0.5 else 0.0,
+                    "move_deeper_outside_zone": (
+                        -self.move_deeper_outside_zone_penalty if outside_safe and move_toward_center < -0.2 else 0.0
+                    ),
+                    "near_edge_outward": (
+                        -self.near_edge_outward_penalty if edge_ratio > 0.90 and move_toward_center < 0.0 else 0.0
+                    ),
+                }
+            )
+        return components
 
     def _aim_alignment(self, decoded: dict[str, float]) -> float:
         return float(self._aim_debug(self._aim_bin_from_decoded(decoded), decoded)["aim_alignment"])
@@ -547,15 +658,21 @@ class CPCEnv:
         aim_dir = normalize_vec({"x": float(decoded["aimX"]), "y": float(decoded["aimY"])})
         has_enemy = target["target_enemy_id"] is not None
         alignment = dot(aim_dir, target_dir) if has_enemy else 0.0
+        ideal_aim_bin = vec_to_aim_bin(target_dir) if has_enemy else 0
+        aim_bin_error = circular_bin_distance(aim_bin, ideal_aim_bin, AIM_BINS) if has_enemy else 0
         return {
             "target_enemy_id": target["target_enemy_id"],
             "target_dir": target_dir,
             "aim_dir": aim_dir,
             "aim_bin": int(aim_bin),
-            "ideal_aim_bin": vec_to_aim_bin(target_dir) if has_enemy else 0,
+            "ideal_aim_bin": ideal_aim_bin,
+            "aim_bin_error": aim_bin_error,
             "aim_alignment": alignment,
             "angle_error_deg": angle_between(aim_dir, target_dir) if has_enemy else 180.0,
-            "is_aim_aligned": bool(has_enemy and alignment >= self.aim_alignment_threshold),
+            "is_exact_aim": bool(has_enemy and aim_bin_error == 0),
+            "is_near_aim": bool(has_enemy and aim_bin_error <= 1),
+            "is_bad_aim": bool(has_enemy and aim_bin_error >= 3),
+            "is_aim_aligned": bool(has_enemy and aim_bin_error <= 1),
         }
 
     def _target_direction(self) -> dict[str, Any]:
@@ -591,11 +708,29 @@ class CPCEnv:
             "move_toward_center": dot(move_dir, center_dir),
         }
 
+    def _range_debug(self, distance_to_enemy: float) -> dict[str, Any]:
+        optimal_range = 0.5 * self.fire_range
+        good_range_min = 0.25 * self.fire_range
+        good_range_max = 0.9 * self.fire_range
+        too_close = float(distance_to_enemy) < good_range_min
+        too_far = float(distance_to_enemy) > good_range_max
+        return {
+            "distance_to_enemy": float(distance_to_enemy),
+            "optimal_range": optimal_range,
+            "good_range_min": good_range_min,
+            "good_range_max": good_range_max,
+            "too_close": bool(too_close),
+            "too_far": bool(too_far),
+            "in_good_range": bool(not too_close and not too_far),
+        }
+
     @staticmethod
     def _aim_bin_from_decoded(decoded: dict[str, float]) -> int:
         return vec_to_aim_bin({"x": float(decoded["aimX"]), "y": float(decoded["aimY"])})
 
     def _safe_radius(self) -> float:
+        if not self.shrink_safe_zone:
+            return self.safe_radius_start
         progress = min(1.0, self.step_count / max(1, self.max_steps - 1))
         return self.safe_radius_start + (self.safe_radius_end - self.safe_radius_start) * progress
 
@@ -615,20 +750,36 @@ class CPCEnv:
         }
 
     def _spawn_angle(self) -> float:
+        if self.enemy_spawn_direction is not None:
+            return self.enemy_spawn_direction_angles[self.enemy_spawn_direction]
         if not self.randomize_enemy_spawn_direction:
             return self.rng.uniform(-0.35, 0.35)
-        base_angles = {
-            "right": 0.0,
-            "left": math.pi,
-            "up": -math.pi / 2.0,
-            "down": math.pi / 2.0,
-            "upper_right": -math.pi / 4.0,
-            "lower_right": math.pi / 4.0,
-            "upper_left": -3.0 * math.pi / 4.0,
-            "lower_left": 3.0 * math.pi / 4.0,
-        }
-        direction = self.rng.choice(list(base_angles.values()))
+        direction_name = self.rng.choice(list(self.enemy_spawn_directions))
+        direction = self.enemy_spawn_direction_angles[direction_name]
         return direction + self.rng.uniform(-0.18, 0.18)
+
+    @classmethod
+    def _validate_spawn_directions(cls, directions: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+        if directions is None:
+            return cls.default_enemy_spawn_directions
+        cleaned = tuple(str(direction).strip() for direction in directions if str(direction).strip())
+        if not cleaned:
+            raise ValueError("enemy_spawn_directions must include at least one direction")
+        unknown = [direction for direction in cleaned if direction not in cls.enemy_spawn_direction_angles]
+        if unknown:
+            valid = ", ".join(cls.default_enemy_spawn_directions)
+            raise ValueError(f"unknown enemy spawn direction(s): {unknown}; valid directions: {valid}")
+        return cleaned
+
+    @classmethod
+    def _validate_spawn_direction(cls, direction: str | None) -> str | None:
+        if direction is None or str(direction).strip() == "":
+            return None
+        cleaned = str(direction).strip()
+        if cleaned not in cls.enemy_spawn_direction_angles:
+            valid = ", ".join(cls.default_enemy_spawn_directions)
+            raise ValueError(f"unknown enemy spawn direction {cleaned!r}; valid directions: {valid}")
+        return cleaned
 
     def _trajectory_step(
         self,
