@@ -205,6 +205,35 @@ Run tests:
 python -m pytest experiment -q
 ```
 
+## Stage 1 Reward Hacking Checks
+
+Stage 1 uses a fixed stadium and combat-only reward. The main evaluation metric is:
+
+```text
+damage_trade_ratio = damage_dealt_ratio - damage_taken_ratio
+```
+
+Warning signs:
+
+- high reward but low damage dealt
+- aim accuracy high but bullet hit rate low
+- fire spam with few actual shots
+- shaping reward dominates combat outcome
+- high hit ratio from too few shots
+- survival without combat
+
+Analyze one compact gameplay result:
+
+```powershell
+python experiment/analyze_local_combat_eval.py --result experiment/runs/manual_debug/local_combat_micro.combat_only.compact.json --output-md experiment/runs/manual_debug/local_combat_micro.analysis.md
+```
+
+Evaluate baselines:
+
+```powershell
+python experiment/eval_local_combat_baselines.py --config experiment/configs/local_combat_micro.yaml --checkpoint-a "C:\Users\PC\Downloads\checkpoint_latest.pt" --episodes 20 --output-md experiment/runs/manual_debug/local_combat_baselines.md
+```
+
 ## Aim-bin reward and aim-collapse debugging
 
 Mean aim alignment can be misleading when enemies often appear to the right: a policy can collapse to `aim_bin=0`, hold fire, and still look partly aligned. The toy CPC env now computes `ideal_aim_bin`, circular `aim_bin_error`, exact/near/bad aim flags, and rewards discrete aim-bin accuracy instead of mostly rewarding dot-product alignment.

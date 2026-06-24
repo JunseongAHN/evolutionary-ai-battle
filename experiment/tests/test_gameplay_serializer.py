@@ -327,6 +327,13 @@ def test_env_does_not_import_pygame():
     assert "pygame" not in source
 
 
+def test_env_does_not_import_policy_or_checkpoint():
+    source = (EXPERIMENT_ROOT / "training" / "cpc_env.py").read_text(encoding="utf-8").lower()
+
+    assert "policy" not in source
+    assert "checkpoint" not in source
+
+
 def test_renderer_import_fails_gracefully_if_pygame_missing(monkeypatch):
     real_import = builtins.__import__
 
