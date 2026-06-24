@@ -1,0 +1,37 @@
+stage: local_combat
+max_episode_steps: 100
+shrink_safe_zone: false
+use_zone_reward: false
+enemy_move: false
+enemy_fire: false
+stationary_target_mode: true
+randomize_enemy_spawn_direction: true
+enemy_spawn_directions:
+  - right
+  - left
+  - up
+  - down
+  - upper_right
+  - lower_right
+  - upper_left
+  - lower_left
+
+fire_interval_steps: 5
+bullet_speed: 140.0
+bullet_range: 280.0
+bullet_damage: 10.0
+bullet_hit_radius: 12.0
+
+total_steps: 100000
+rollout_steps: 1024
+num_epochs: 4
+minibatch_size: 256
+hidden_dim: 128
+run_dir: experiment/runs
+checkpoint_selection:
+  metric: stage1_combat_quality
+selection_metric: stage1_combat_quality
+selection_mode: max
+selection_eval_episodes: 5
+eval_analysis_interval_steps: 10000
+eval_analysis_episodes: 2

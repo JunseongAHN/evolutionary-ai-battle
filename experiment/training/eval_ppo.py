@@ -51,6 +51,20 @@ def eval_checkpoint(
             seed=int(cfg.get("seed", 0)) + episode,
             max_steps=int(cfg.get("max_episode_steps", 50)),
             device=device,
+            randomize_enemy_spawn_direction=bool(cfg.get("randomize_enemy_spawn_direction", False)),
+            enemy_spawn_directions=cfg.get("enemy_spawn_directions"),
+            enemy_spawn_direction=cfg.get("enemy_spawn_direction"),
+            stage=str(cfg.get("stage", "local_combat")),
+            shrink_safe_zone=bool(cfg.get("shrink_safe_zone", False)),
+            use_zone_reward=bool(cfg.get("use_zone_reward", False)),
+            enemy_move=bool(cfg.get("enemy_move", True)),
+            enemy_fire=bool(cfg.get("enemy_fire", True)),
+            stationary_target_mode=bool(cfg.get("stationary_target_mode", False)),
+            fire_interval_steps=cfg.get("fire_interval_steps"),
+            bullet_speed=cfg.get("bullet_speed"),
+            bullet_range=cfg.get("bullet_range"),
+            bullet_damage=cfg.get("bullet_damage"),
+            bullet_hit_radius=cfg.get("bullet_hit_radius"),
         )
         obs = env.reset()
         done = False

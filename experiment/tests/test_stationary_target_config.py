@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import csv
+import pathlib
+import sys
+
+import pytest
+
+EXPERIMENT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(EXPERIMENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(EXPERIMENT_ROOT))
+
+torch = pytest.importorskip("torch")
+pytest.importorskip("torchrl")
+pytest.importorskip("tensordict")
+
+from training.torchrl_env import TorchRLCPCEnv
+from training.train_ppo import PPOConfig, load_config, train_ppo
+
+
+def test_stationary_target_config_sets_enemy_flags():
+    cfg = load_config("experiment/configs/local_combat_stationary_target.yaml")
+
+    assert cfg.stage == "local_combat"
+    assert cfg.randomize_enemy_spawn_direction is True
+    assert cfg.enemy_move is False
+    assert cfg.enemy_fire is False
+    assert cfg.stationary_target_mode is True
+
+
+def test_stationary_target_env_keeps_enemy_still_and_damage_taken_zero():
+    env = TorchRLCPCEnv(
+        seed=7,
+        max_steps=8,
+        device="cpu",
+        enemy_move=False,
+        enemy_fire=False,
+        stationary_target_mode=True,
+        randomize_enemy_spawn_direction=True,
+    )
+    obs = env.reset()
+    initial_enemy_pos = dict(env.cpc_env.state["enemy_pos"])
+
+    step_td = obs.clone()
+    step_td["move"] = torch.tensor(0, dtype=torch.int64)
+    step_td["aim"] = torch.tensor(0, dtype=torch.int64)
+    step_td["fire"] = torch.tensor(0, dtype=torch.int64)
+    next_td = env.step(step_td)["next"]
+
+    assert env.cpc_env.state["enemy_pos"] == initial_enemy_pos
+    assert float(next_td["metrics", "damage_taken"].reshape(-1)[0].item()) == 0.0
+    assert float(next_td["metrics", "damage_taken_ratio"].reshape(-1)[0].item()) == 0.0
+
+
+def test_stationary_target_training_writes_stationary_fields(tmp_path):
+    cfg = PPOConfig(
+        seed=11,
+        device="cpu",
+        total_steps=8,
+        rollout_steps=4,
+        num_epochs=1,
+        minibatch_size=2,
+        max_episode_steps=4,
+        hidden_dim=16,
+        run_dir=str(tmp_path),
+        randomize_enemy_spawn_direction=True,
+        enemy_move=False,
+        enemy_fire=False,
+        stationary_target_mode=True,
+        eval_analysis_interval_steps=4,
+        eval_analysis_episodes=1,
+        selection_eval_episodes=1,
+    )
+
+    result = train_ppo(cfg)
+
+    assert result["last_metrics"]["enemy_move"] == 0.0
+    assert result["last_metrics"]["enemy_fire"] == 0.0
+    assert result["last_metrics"]["stationary_target_mode"] == 1.0
+    assert result["last_metrics"]["eval_analysis_enemy_move"] == 0.0
+    assert result["last_metrics"]["eval_analysis_enemy_fire"] == 0.0
+    assert result["last_metrics"]["eval_analysis_stationary_target_mode"] == 1.0
+    assert result["last_metrics"]["eval_analysis_damage_taken"] == 0.0
+
+    with pathlib.Path(result["metrics_csv"]).open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        columns = set(reader.fieldnames or [])
+
+    for column in (
+        "enemy_move",
+        "enemy_fire",
+        "stationary_target_mode",
+        "eval_analysis_damage_taken",
+        "eval_analysis_enemy_move",
+        "eval_analysis_enemy_fire",
+        "eval_analysis_stationary_target_mode",
+    ):
+        assert column in columns
+
+    assert rows
+    assert float(rows[-1]["enemy_move"]) == 0.0
+    assert float(rows[-1]["enemy_fire"]) == 0.0
+    assert float(rows[-1]["stationary_target_mode"]) == 1.0

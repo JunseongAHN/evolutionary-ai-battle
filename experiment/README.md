@@ -253,6 +253,33 @@ Example interpretations:
 - If `shot_fired_count > 0`, `self_bullet_hit_count = 0`, and `self_bullet_missed_count = 0`, projectile lifecycle logging may be broken.
 - If `aim_bin_0_rate = 1.0` and `exact_aim_match_rate` is low, the policy has collapsed to aim bin 0.
 
+## Scripted aim-at-enemy baseline
+
+The scripted aim-at-enemy baseline validates projectile mechanics before changing PPO training. It reads the debug env state, aims at the current enemy position, fires only when the weapon can fire, and records aim-bin, bullet direction, spawn position, and projectile lifecycle diagnostics.
+
+Interpretation:
+
+- If the scripted baseline hits reliably, projectile mechanics are valid and PPO failure is likely observation, reward, or curriculum related.
+- If the scripted baseline cannot hit, inspect the saved diagnostics for aim-bin conversion, bullet direction, spawn position, projectile update order, collision radius, target movement, bullet range, or logging bugs before training more.
+
+Run the baseline:
+
+```powershell
+python experiment/eval_scripted_aim_baseline.py --episodes 20 --max-steps 100 --seed 0 --mode stand_still --save-result experiment/runs/manual_debug/scripted_aim_baseline.json
+```
+
+Direction sweep:
+
+```powershell
+python experiment/eval_scripted_aim_baseline.py --episodes 1 --max-steps 50 --seed 0 --mode stand_still --sweep-directions
+```
+
+Pygame debug:
+
+```powershell
+python experiment/eval_scripted_aim_baseline.py --episodes 1 --max-steps 100 --seed 0 --mode stand_still --fixed-enemy-direction right --render-pygame --save-result experiment/runs/manual_debug/scripted_aim_right_pygame.json
+```
+
 Evaluate baselines:
 
 ```powershell

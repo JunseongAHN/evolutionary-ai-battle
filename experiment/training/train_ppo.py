@@ -66,6 +66,9 @@ class PPOConfig:
     stage: str = "local_combat"
     shrink_safe_zone: bool = False
     use_zone_reward: bool = False
+    enemy_move: bool = True
+    enemy_fire: bool = True
+    stationary_target_mode: bool = False
     fire_interval_steps: int = 5
     bullet_speed: float = 140.0
     bullet_range: float = 280.0
@@ -271,6 +274,9 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         stage=cfg.stage,
         shrink_safe_zone=cfg.shrink_safe_zone,
         use_zone_reward=cfg.use_zone_reward,
+        enemy_move=cfg.enemy_move,
+        enemy_fire=cfg.enemy_fire,
+        stationary_target_mode=cfg.stationary_target_mode,
         fire_interval_steps=cfg.fire_interval_steps,
         bullet_speed=cfg.bullet_speed,
         bullet_range=cfg.bullet_range,
@@ -359,6 +365,9 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
             "eval_mean_episode_reward": eval_mean_episode_reward,
             "selection_metric": cfg.selection_metric,
             "selection_value": selection_value,
+            "enemy_move": float(bool(cfg.enemy_move)),
+            "enemy_fire": float(bool(cfg.enemy_fire)),
+            "stationary_target_mode": float(bool(cfg.stationary_target_mode)),
             "is_selected_checkpoint": False,
             "checkpoint_latest": str(paths["checkpoint_latest"]),
             "checkpoint_selected": str(paths["checkpoint_selected"]),
@@ -468,6 +477,9 @@ def evaluate_policy_mean_return(
             stage=cfg.stage,
             shrink_safe_zone=cfg.shrink_safe_zone,
             use_zone_reward=cfg.use_zone_reward,
+            enemy_move=cfg.enemy_move,
+            enemy_fire=cfg.enemy_fire,
+            stationary_target_mode=cfg.stationary_target_mode,
             fire_interval_steps=cfg.fire_interval_steps,
             bullet_speed=cfg.bullet_speed,
             bullet_range=cfg.bullet_range,
@@ -515,6 +527,9 @@ def evaluate_policy_local_combat_analysis(
             stage=cfg.stage,
             shrink_safe_zone=cfg.shrink_safe_zone,
             use_zone_reward=cfg.use_zone_reward,
+            enemy_move=cfg.enemy_move,
+            enemy_fire=cfg.enemy_fire,
+            stationary_target_mode=cfg.stationary_target_mode,
             fire_interval_steps=cfg.fire_interval_steps,
             bullet_speed=cfg.bullet_speed,
             bullet_range=cfg.bullet_range,
@@ -566,6 +581,9 @@ def evaluate_policy_local_combat_analysis(
                 "episodes": max(1, int(episodes)),
                 "max_steps": int(cfg.max_episode_steps),
                 "stage": cfg.stage,
+                "enemy_move": bool(cfg.enemy_move),
+                "enemy_fire": bool(cfg.enemy_fire),
+                "stationary_target_mode": bool(cfg.stationary_target_mode),
             },
             "episodes": result_episodes,
         }
@@ -617,12 +635,17 @@ def stage1_combat_quality_score(analysis: dict[str, Any]) -> float:
 
 def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
     aggregate = analysis.get("aggregate", {})
+    config = analysis.get("config", {})
     warning_count = sum(int(value) for value in aggregate.get("warnings", {}).values())
     return {
         "eval_analysis_total_reward": float(aggregate.get("total_reward", 0.0)),
+        "eval_analysis_damage_taken": float(aggregate.get("damage_taken", 0.0)),
         "eval_analysis_damage_dealt_ratio": float(aggregate.get("damage_dealt_ratio", 0.0)),
         "eval_analysis_damage_taken_ratio": float(aggregate.get("damage_taken_ratio", 0.0)),
         "eval_analysis_damage_trade_ratio": float(aggregate.get("damage_trade_ratio", 0.0)),
+        "eval_analysis_enemy_move": float(bool(config.get("enemy_move", True))),
+        "eval_analysis_enemy_fire": float(bool(config.get("enemy_fire", True))),
+        "eval_analysis_stationary_target_mode": float(bool(config.get("stationary_target_mode", False))),
         "eval_analysis_fire_requested_count": float(aggregate.get("fire_requested_count", 0.0)),
         "eval_analysis_shot_fired_count": float(aggregate.get("shot_fired_count", 0.0)),
         "eval_analysis_fire_blocked_cooldown_count": float(aggregate.get("fire_blocked_cooldown_count", 0.0)),
@@ -706,6 +729,9 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "eval_mean_episode_reward",
         "selection_metric",
         "selection_value",
+        "enemy_move",
+        "enemy_fire",
+        "stationary_target_mode",
         "is_selected_checkpoint",
         "checkpoint_latest",
         "checkpoint_selected",
@@ -718,9 +744,13 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "clip_fraction",
         *METRIC_KEYS,
         "eval_analysis_total_reward",
+        "eval_analysis_damage_taken",
         "eval_analysis_damage_dealt_ratio",
         "eval_analysis_damage_taken_ratio",
         "eval_analysis_damage_trade_ratio",
+        "eval_analysis_enemy_move",
+        "eval_analysis_enemy_fire",
+        "eval_analysis_stationary_target_mode",
         "eval_analysis_fire_requested_count",
         "eval_analysis_shot_fired_count",
         "eval_analysis_fire_blocked_cooldown_count",

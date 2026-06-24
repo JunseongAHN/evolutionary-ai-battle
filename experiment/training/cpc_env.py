@@ -126,6 +126,9 @@ class CPCEnv:
         stage: str = "local_combat",
         shrink_safe_zone: bool = False,
         use_zone_reward: bool = False,
+        enemy_move: bool = True,
+        enemy_fire: bool = True,
+        stationary_target_mode: bool = False,
         fire_interval_steps: int | None = None,
         bullet_speed: float | None = None,
         bullet_range: float | None = None,
@@ -137,6 +140,9 @@ class CPCEnv:
         self.stage = stage
         self.shrink_safe_zone = bool(shrink_safe_zone)
         self.use_zone_reward = bool(use_zone_reward)
+        self.enemy_move = bool(enemy_move)
+        self.enemy_fire = bool(enemy_fire)
+        self.stationary_target_mode = bool(stationary_target_mode)
         if fire_interval_steps is not None:
             self.fire_interval_steps = int(fire_interval_steps)
         if bullet_speed is not None:
@@ -360,6 +366,9 @@ class CPCEnv:
                 "safe_radius": self._safe_radius(),
                 "shrink_safe_zone": self.shrink_safe_zone,
                 "use_zone_reward": self.use_zone_reward,
+                "enemy_move": self.enemy_move,
+                "enemy_fire": self.enemy_fire,
+                "stationary_target_mode": self.stationary_target_mode,
             },
             "combat": {
                 "fire_range": self.fire_range,
@@ -417,6 +426,8 @@ class CPCEnv:
         pos["y"] = self._clamp(pos["y"] + move_y * self.move_speed, 0.0, self.height)
 
     def _script_enemy_pressure(self) -> None:
+        if not self.enemy_move:
+            return
         if float(self.state["enemy_hp"]) <= 0.0:
             return
         enemy = self.state["enemy_pos"]
@@ -566,6 +577,8 @@ class CPCEnv:
         return damage_dealt, events
 
     def _resolve_enemy_pressure(self) -> float:
+        if not self.enemy_fire:
+            return 0.0
         damage_taken = 0.0
         if float(self.state["enemy_hp"]) <= 0.0:
             return 0.0
@@ -614,6 +627,16 @@ class CPCEnv:
         prior_hits = int(float(summary.get("bullet_hit_count", 0.0)))
         episode_shots = prior_shots + int(shot_fired)
         hit_ratio = (prior_hits + int(bullet_hit)) / max(prior_shots + int(shot_fired), 1)
+        if self.stationary_target_mode:
+            return {
+                "damage_dealt_ratio": self.damage_dealt_ratio_weight * enemy_hp_loss_ratio,
+                "damage_taken_ratio": 0.0,
+                "bullet_hit": self.bullet_hit_bonus if bullet_hit else 0.0,
+                "missed_shot": -self.missed_shot_penalty if bullet_expired and not bullet_hit else 0.0,
+                "aim_bin_exact": self.aim_bin_exact_bonus if shot_fired and aim_bin_error == 0 else 0.0,
+                "aim_bin_wrong": -self.aim_bin_wrong_penalty if shot_fired and aim_bin_error >= 2 else 0.0,
+                "aim_alignment": 0.02 * max(0.0, float(aim_debug["aim_alignment"])) if shot_fired else 0.0,
+            }
         components = {
             "damage_dealt_ratio": self.damage_dealt_ratio_weight * enemy_hp_loss_ratio,
             "damage_taken_ratio": self.damage_taken_ratio_weight * self_hp_loss_ratio,
