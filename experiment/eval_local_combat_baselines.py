@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -11,7 +12,6 @@ try:
     from experiment.analyze_local_combat_eval import analyze_result, render_markdown
     from experiment.training.cpc_actions import AIM_BINS, decode_action, random_action, vec_to_aim_bin
     from experiment.training.cpc_env import CPCEnv
-    from experiment.training.train_ppo import load_config
 except ModuleNotFoundError:
     EXPERIMENT_ROOT = Path(__file__).resolve().parent
     REPO_ROOT = EXPERIMENT_ROOT.parent
@@ -21,7 +21,32 @@ except ModuleNotFoundError:
     from analyze_local_combat_eval import analyze_result, render_markdown
     from training.cpc_actions import AIM_BINS, decode_action, random_action, vec_to_aim_bin
     from training.cpc_env import CPCEnv
-    from training.train_ppo import load_config
+
+
+@dataclass
+class BaselineConfig:
+    seed: int = 0
+    max_episode_steps: int = 100
+    stage: str = "local_combat"
+    shrink_safe_zone: bool = False
+    use_zone_reward: bool = False
+    fire_interval_steps: int = 5
+    bullet_speed: float = 140.0
+    bullet_range: float = 280.0
+    bullet_damage: float = 10.0
+    bullet_hit_radius: float = 12.0
+    randomize_enemy_spawn_direction: bool = True
+    enemy_spawn_directions: tuple[str, ...] = (
+        "right",
+        "left",
+        "up",
+        "down",
+        "upper_right",
+        "lower_right",
+        "upper_left",
+        "lower_left",
+    )
+    enemy_spawn_direction: str | None = None
 
 
 class Agent(Protocol):
@@ -116,7 +141,7 @@ def run_policy(policy_name: str, agent: Agent, cfg: Any, episodes: int) -> dict[
 
 
 def evaluate_baselines(config: str | Path, checkpoint_a: str | None, episodes: int, device: str = "cpu") -> dict[str, Any]:
-    cfg = load_config(config)
+    cfg = load_baseline_config(config)
     policies: list[tuple[str, Agent]] = [
         ("random", RandomBaseline(seed=int(cfg.seed))),
         ("aim0_fire", Aim0FireBaseline()),
@@ -150,6 +175,16 @@ def evaluate_baselines(config: str | Path, checkpoint_a: str | None, episodes: i
             }
         )
     return {"rows": rows, "analyses": analyses}
+
+
+def load_baseline_config(path: str | Path) -> BaselineConfig:
+    cfg = BaselineConfig()
+    values = _read_simple_yaml(Path(path))
+    for key, value in values.items():
+        if hasattr(cfg, key):
+            current = getattr(cfg, key)
+            setattr(cfg, key, _coerce_value(value, current))
+    return cfg
 
 
 def render_baseline_markdown(result: dict[str, Any]) -> str:
@@ -225,6 +260,50 @@ def _mean_metric(analysis: dict[str, Any], key: str) -> float:
     if not episodes:
         return 0.0
     return sum(float(ep.get("metrics", {}).get(key, 0.0)) for ep in episodes) / len(episodes)
+
+
+def _read_simple_yaml(path: Path) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    if not path.exists():
+        return values
+    current_list_key: str | None = None
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        stripped = line.strip()
+        if not stripped:
+            current_list_key = None
+            continue
+        if current_list_key is not None and stripped.startswith("- "):
+            values[current_list_key].append(stripped[2:].strip().strip('"').strip("'"))
+            continue
+        current_list_key = None
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if value == "":
+            values[key] = []
+            current_list_key = key
+            continue
+        values[key] = value.strip('"').strip("'")
+    return values
+
+
+def _coerce_value(value: Any, current: Any) -> Any:
+    if isinstance(current, tuple):
+        if isinstance(value, list):
+            return tuple(str(item) for item in value)
+        return tuple(item.strip() for item in str(value).split(",") if item.strip())
+    if value in ("null", "None", ""):
+        return None
+    if isinstance(current, bool):
+        return str(value).lower() in {"1", "true", "yes", "on"}
+    if isinstance(current, int) and not isinstance(current, bool):
+        return int(value)
+    if isinstance(current, float):
+        return float(value)
+    return value
 
 
 def main() -> None:

@@ -19,6 +19,7 @@ try:
         save_selected_checkpoint_if_needed,
         selected_paths,
     )
+    from experiment.analyze_local_combat_eval import analyze_result
 except ModuleNotFoundError:
     import sys
 
@@ -32,13 +33,14 @@ except ModuleNotFoundError:
         save_selected_checkpoint_if_needed,
         selected_paths,
     )
+    from experiment.analyze_local_combat_eval import analyze_result
 
 if __package__:
-    from .cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
+    from .cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS, decode_action
     from .ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
     from .torchrl_env import METRIC_KEYS, REWARD_COMPONENT_KEYS, TorchRLCPCEnv
 else:
-    from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
+    from cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS, decode_action
     from ppo_policy import OBS_DIM, OBS_KEYS, MultiDiscreteActorCritic, flatten_observation
     from torchrl_env import METRIC_KEYS, REWARD_COMPONENT_KEYS, TorchRLCPCEnv
 
@@ -72,6 +74,8 @@ class PPOConfig:
     selection_metric: str = "eval_mean_episode_reward"
     selection_mode: str = "max"
     selection_eval_episodes: int = 2
+    eval_analysis_interval_steps: int = 10000
+    eval_analysis_episodes: int = 2
     randomize_enemy_spawn_direction: bool = True
     enemy_spawn_directions: tuple[str, ...] = (
         "right",
@@ -284,6 +288,11 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
     )
     rows = []
     steps = 0
+    next_eval_analysis_step = (
+        int(cfg.eval_analysis_interval_steps)
+        if int(cfg.eval_analysis_interval_steps) > 0
+        else None
+    )
 
     while steps < cfg.total_steps:
         rollout = collect_rollout(env, policy, cfg)
@@ -316,6 +325,19 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
             if cfg.selection_metric == "eval_mean_episode_reward"
             else _mean(rollout["episode_returns"])
         )
+        eval_analysis = None
+        if next_eval_analysis_step is not None and steps >= next_eval_analysis_step:
+            eval_analysis = evaluate_policy_local_combat_analysis(
+                policy,
+                cfg,
+                episodes=cfg.eval_analysis_episodes,
+                device=device,
+                seed_offset=10_000 + len(rows) * max(1, cfg.eval_analysis_episodes),
+            )
+            eval_analysis_path = run_dir / f"eval_analysis_step_{steps}.json"
+            eval_analysis_path.write_text(json.dumps(eval_analysis, indent=2, sort_keys=True), encoding="utf-8")
+            while next_eval_analysis_step is not None and steps >= next_eval_analysis_step:
+                next_eval_analysis_step += int(cfg.eval_analysis_interval_steps)
         row = {
             "update": len(rows) + 1,
             "step": steps,
@@ -333,6 +355,9 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
             **rollout["last_metrics"],
             **rollout["reward_components_mean"],
         }
+        if eval_analysis is not None:
+            row.update(_eval_analysis_row(eval_analysis))
+            row["eval_analysis_path"] = str(eval_analysis_path)
         save_checkpoint(
             paths["checkpoint_latest"],
             policy=policy,
@@ -365,18 +390,20 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         rows.append(row)
         _write_metrics(metrics_path, rows)
         if progress:
+            progress_payload = {
+                "update": row["update"],
+                "step": row["step"],
+                "total_steps": cfg.total_steps,
+                "episodic_return_mean": row["episodic_return_mean"],
+                "eval_mean_episode_reward": row["eval_mean_episode_reward"],
+                "selection_value": row["selection_value"],
+                "is_selected_checkpoint": row["is_selected_checkpoint"],
+            }
+            if eval_analysis is not None:
+                progress_payload["eval_analysis"] = eval_analysis["aggregate"]
+                progress_payload["eval_analysis_path"] = str(eval_analysis_path)
             print(
-                json.dumps(
-                    {
-                        "update": row["update"],
-                        "step": row["step"],
-                        "total_steps": cfg.total_steps,
-                        "episodic_return_mean": row["episodic_return_mean"],
-                        "eval_mean_episode_reward": row["eval_mean_episode_reward"],
-                        "selection_value": row["selection_value"],
-                        "is_selected_checkpoint": row["is_selected_checkpoint"],
-                    }
-                ),
+                json.dumps(progress_payload),
                 file=sys.stderr,
                 flush=True,
             )
@@ -451,6 +478,86 @@ def evaluate_policy_mean_return(
     return _mean(returns)
 
 
+@torch.no_grad()
+def evaluate_policy_local_combat_analysis(
+    policy: MultiDiscreteActorCritic,
+    cfg: PPOConfig,
+    *,
+    episodes: int,
+    device: torch.device,
+    seed_offset: int = 0,
+) -> dict[str, Any]:
+    was_training = policy.training
+    policy.eval()
+    result_episodes = []
+    for episode in range(max(1, int(episodes))):
+        env = TorchRLCPCEnv(
+            seed=int(cfg.seed) + seed_offset + episode,
+            max_steps=int(cfg.max_episode_steps),
+            device=device,
+            randomize_enemy_spawn_direction=cfg.randomize_enemy_spawn_direction,
+            enemy_spawn_directions=cfg.enemy_spawn_directions,
+            enemy_spawn_direction=cfg.enemy_spawn_direction,
+            stage=cfg.stage,
+            shrink_safe_zone=cfg.shrink_safe_zone,
+            use_zone_reward=cfg.use_zone_reward,
+            fire_interval_steps=cfg.fire_interval_steps,
+            bullet_speed=cfg.bullet_speed,
+            bullet_range=cfg.bullet_range,
+            bullet_damage=cfg.bullet_damage,
+            bullet_hit_radius=cfg.bullet_hit_radius,
+        )
+        cpc_env = env.cpc_env
+        obs = cpc_env.reset(seed=int(cfg.seed) + seed_offset + episode)
+        done = False
+        total_reward = 0.0
+        steps = []
+        while not done and cpc_env.step_count < int(cfg.max_episode_steps):
+            step_index = cpc_env.step_count
+            obs_td = env._td_from_obs(
+                obs,
+                reward=None,
+                done=False,
+                terminated=False,
+                truncated=False,
+                info={},
+            )
+            move_logits, aim_logits, fire_logits, _ = policy(obs_td)
+            action = {
+                "move": int(move_logits.argmax(dim=-1).reshape(-1)[0].item()),
+                "aim": int(aim_logits.argmax(dim=-1).reshape(-1)[0].item()),
+                "fire": int(fire_logits.argmax(dim=-1).reshape(-1)[0].item()),
+            }
+            decoded = decode_action(action)
+            obs, reward, done, info = cpc_env.step(action)
+            total_reward += float(reward)
+            steps.append(_compact_eval_step(step_index, action, decoded, reward, info, cpc_env))
+        result_episodes.append(
+            {
+                "episode_index": episode,
+                "steps": steps,
+                "episode_return": {"agent": total_reward},
+                "episode_length": len(steps),
+                "final_metrics": cpc_env.metrics.summary(),
+                "stopped_early": False,
+            }
+        )
+    if was_training:
+        policy.train()
+    return analyze_result(
+        {
+            "schema_version": "cpc-common-v0",
+            "source": "train_ppo_eval_analysis",
+            "config": {
+                "episodes": max(1, int(episodes)),
+                "max_steps": int(cfg.max_episode_steps),
+                "stage": cfg.stage,
+            },
+            "episodes": result_episodes,
+        }
+    )
+
+
 def resolve_device(device: str) -> torch.device:
     if device == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -480,6 +587,72 @@ def _reward_components_from_td(td) -> dict[str, float]:
     return components
 
 
+def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
+    aggregate = analysis.get("aggregate", {})
+    warning_count = sum(int(value) for value in aggregate.get("warnings", {}).values())
+    return {
+        "eval_analysis_total_reward": float(aggregate.get("total_reward", 0.0)),
+        "eval_analysis_damage_dealt_ratio": float(aggregate.get("damage_dealt_ratio", 0.0)),
+        "eval_analysis_damage_taken_ratio": float(aggregate.get("damage_taken_ratio", 0.0)),
+        "eval_analysis_damage_trade_ratio": float(aggregate.get("damage_trade_ratio", 0.0)),
+        "eval_analysis_hit_ratio": float(aggregate.get("hit_ratio", 0.0)),
+        "eval_analysis_missed_shot_rate": float(aggregate.get("missed_shot_rate", 0.0)),
+        "eval_analysis_aim_bin_0_rate": float(aggregate.get("aim_bin_0_rate", 0.0)),
+        "eval_analysis_exact_aim_match_rate": float(aggregate.get("exact_aim_match_rate", 0.0)),
+        "eval_analysis_good_range_rate": float(aggregate.get("good_range_rate", 0.0)),
+        "eval_analysis_reward_hacking_warning_count": float(warning_count),
+    }
+
+
+def _compact_eval_step(
+    step_index: int,
+    action: dict[str, int],
+    decoded: dict[str, Any],
+    reward: float,
+    info: dict[str, Any],
+    cpc_env,
+) -> dict[str, Any]:
+    return {
+        "t": step_index,
+        "action": {
+            "raw": dict(action),
+            "decoded": {
+                "move": {"x": decoded["moveX"], "y": decoded["moveY"]},
+                "aim": {"x": decoded["aimX"], "y": decoded["aimY"]},
+                "fire": decoded["fire"],
+            },
+        },
+        "aim": {
+            "aim_bin": info.get("aim_debug", {}).get("aim_bin"),
+            "ideal_aim_bin": info.get("aim_debug", {}).get("ideal_aim_bin"),
+            "aim_bin_error": info.get("aim_debug", {}).get("aim_bin_error"),
+            "alignment": info.get("aim_debug", {}).get("aim_alignment", 0.0),
+            "angle_error_deg": info.get("aim_debug", {}).get("angle_error_deg", 0.0),
+        },
+        "fire": {
+            "requested": info.get("fire", {}).get("fire_requested", False),
+            "shot_fired": info.get("fire", {}).get("shot_fired", False),
+            "blocked_reason": info.get("fire", {}).get("fire_blocked_reason"),
+            "cooldown_before": info.get("fire", {}).get("cooldown_remaining_steps_before"),
+            "cooldown_after": info.get("fire", {}).get("cooldown_remaining_steps_after"),
+        },
+        "range": info.get("range_debug", {}),
+        "events": info.get("bullet_events", []),
+        "bullets": info.get("bullets", []),
+        "reward": float(reward),
+        "reward_components": info.get("reward_components", {}),
+        "state_after": {
+            "self": {"hp": cpc_env.state.get("self_hp"), "pos": cpc_env.state.get("self_pos")},
+            "enemy": {"hp": cpc_env.state.get("enemy_hp"), "pos": cpc_env.state.get("enemy_pos")},
+            "dist": {"enemy": info.get("range_debug", {}).get("distance_to_enemy")},
+        },
+        "metrics_delta": {
+            "damage_dealt_delta": info.get("damage_delta", {}).get("enemy_hp", 0.0),
+            "damage_taken_delta": info.get("damage_delta", {}).get("self_hp", 0.0),
+        },
+    }
+
+
 def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -502,6 +675,17 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "approx_kl",
         "clip_fraction",
         *METRIC_KEYS,
+        "eval_analysis_total_reward",
+        "eval_analysis_damage_dealt_ratio",
+        "eval_analysis_damage_taken_ratio",
+        "eval_analysis_damage_trade_ratio",
+        "eval_analysis_hit_ratio",
+        "eval_analysis_missed_shot_rate",
+        "eval_analysis_aim_bin_0_rate",
+        "eval_analysis_exact_aim_match_rate",
+        "eval_analysis_good_range_rate",
+        "eval_analysis_reward_hacking_warning_count",
+        "eval_analysis_path",
         *[f"reward_{key}" for key in REWARD_COMPONENT_KEYS],
         "total_reward",
     ]

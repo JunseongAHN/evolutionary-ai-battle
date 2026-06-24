@@ -17,4 +17,6 @@ run_dir: experiment/runs
 selection_metric: eval_mean_episode_reward
 selection_mode: max
 selection_eval_episodes: 5
+eval_analysis_interval_steps: 10000
+eval_analysis_episodes: 2
 randomize_enemy_spawn_direction: false
