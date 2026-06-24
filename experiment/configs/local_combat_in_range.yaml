@@ -20,7 +20,7 @@ enemy_spawn_distance_max: 240.0
 
 fire_interval_steps: 5
 bullet_speed: 140.0
-bullet_range: 240.0
+bullet_range: 280.0
 bullet_damage: 10.0
 bullet_hit_radius: 12.0
 
