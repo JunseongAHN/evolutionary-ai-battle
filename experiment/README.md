@@ -187,6 +187,19 @@ Stage 1 uses a fixed local combat stadium. Safe-zone shrink and zone rewards are
 
 The main reward signal is `damage_dealt_ratio - damage_taken_ratio`. Projectile hit and miss rewards are small, aim-bin shaping is capped at `0.04`, and range shaping is intentionally minor.
 
+## Stage 1 reward gating against no-combat reward hacking
+
+The policy previously obtained positive reward while firing zero shots, dealing zero damage, losing all HP, keeping `aim_bin=0`, and collecting aim/range shaping reward.
+
+Stage 1 now gates shaping so no-combat behavior cannot look good:
+
+- aim reward is only given when an actual shot is fired
+- positive range reward requires combat engagement from a shot, damage dealt, or damage taken
+- no-shot terminal episodes receive penalties, with extra penalties for dying without shooting or dying without damage dealt
+- checkpoint selection uses `stage1_combat_quality`, not raw eval reward alone
+
+A policy is only improving if `damage_trade_ratio` increases, `shot_fired_count` is nonzero, `bullet_hit_per_shot` increases, `damage_dealt_ratio` increases, `damage_taken_ratio` decreases, and warning count decreases.
+
 Train Stage 1:
 
 ```powershell
@@ -227,6 +240,18 @@ Analyze one compact gameplay result:
 ```powershell
 python experiment/analyze_local_combat_eval.py --result experiment/runs/manual_debug/local_combat_micro.combat_only.compact.json --output-md experiment/runs/manual_debug/local_combat_micro.analysis.md
 ```
+
+## Stage 1 eval analysis counters
+
+Stage 1 eval analysis counters distinguish no fire request, cooldown-blocked fire requests, actual shots that miss, shots whose projectile lifecycle is not tracked, enemy bullets causing self damage, and aim-bin collapse.
+
+The full eval analysis JSON includes fire counters, self/enemy bullet lifecycle counters, aim distributions, shot-time aim distributions, hit/miss-time aim distributions, range event-time rates, and warning counts. During PPO training, the compact `eval_analysis` progress log includes the high-level subset needed to tell whether the policy is failing before firing, after firing, or because aim has collapsed.
+
+Example interpretations:
+
+- If `damage_dealt_ratio = 0`, `damage_taken_ratio = 1`, and `shot_fired_count = 0`, the policy is not firing actual shots.
+- If `shot_fired_count > 0`, `self_bullet_hit_count = 0`, and `self_bullet_missed_count = 0`, projectile lifecycle logging may be broken.
+- If `aim_bin_0_rate = 1.0` and `exact_aim_match_rate` is low, the policy has collapsed to aim bin 0.
 
 Evaluate baselines:
 

@@ -11,6 +11,7 @@ EPSILON = 1e-9
 SHAPING_COMPONENTS = {
     "aim_bin_exact",
     "aim_bin_wrong",
+    "aim_alignment",
     "good_range",
     "too_close",
     "too_far",
@@ -24,6 +25,9 @@ OUTCOME_COMPONENTS = {
     "kill",
     "death",
     "timeout_hp_lead",
+    "no_shot_episode",
+    "death_without_shooting",
+    "death_without_damage",
 }
 
 
@@ -58,7 +62,6 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     missed_aim_errors = Counter()
     range_counts = Counter()
     shot_range_counts = Counter()
-    shot_good_range_count = 0
     hit_good_range_count = 0
     miss_too_far_count = 0
     distance_sum = 0.0
@@ -152,8 +155,6 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
                     "good_range_at_spawn": bool(range_info.get("in_good_range", False)),
                     "too_far_at_spawn": bool(range_info.get("too_far", False)),
                 }
-                if owner_class == "self" and range_info.get("in_good_range"):
-                    shot_good_range_count += 1
             elif event_type == "bullet_moved" and bullet_id in bullets:
                 bullets[bullet_id]["travel_steps"] += 1
             elif event_type == "bullet_hit" and bullet_id in bullets:
@@ -271,7 +272,7 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "avg_distance_to_enemy": distance_sum / max(distance_count, 1),
         "shot_too_close_rate": shot_range_counts["too_close"] / max(shot_fired_count, 1),
         "shot_too_far_rate": shot_range_counts["too_far"] / max(shot_fired_count, 1),
-        "shot_good_range_rate": shot_good_range_count / max(shot_fired_count, 1),
+        "shot_good_range_rate": shot_range_counts["good"] / max(shot_fired_count, 1),
         "hit_good_range_rate": hit_good_range_count / max(self_bullet_hit_count, 1),
         "miss_too_far_rate": miss_too_far_count / max(self_bullet_missed_count, 1),
         "damage_taken_too_close_rate": damage_taken_too_close_count / max(total_steps, 1),
@@ -297,6 +298,18 @@ def detect_warnings(
     max_aim_count: int,
 ) -> list[str]:
     warnings = []
+    aim_shaping_abs = sum(component_stats.get(name, {}).get("abs_sum", 0.0) for name in ("aim_bin_exact", "aim_bin_wrong", "aim_alignment"))
+    range_shaping_abs = sum(component_stats.get(name, {}).get("abs_sum", 0.0) for name in ("good_range", "too_close", "too_far"))
+    if metrics["total_reward"] > 0 and metrics["damage_dealt_ratio"] == 0 and metrics["shot_fired_count"] == 0:
+        warnings.append("positive_reward_without_combat")
+    if metrics["self_dead"] and metrics["shot_fired_count"] == 0:
+        warnings.append("no_shot_death")
+    if aim_shaping_abs > 0 and metrics["shot_fired_count"] == 0:
+        warnings.append("aim_reward_without_shots")
+    if range_shaping_abs > 0 and metrics["damage_dealt_ratio"] == 0:
+        warnings.append("range_reward_without_combat")
+    if metrics.get("selection_value", 0.0) > 0 and metrics["damage_trade_ratio"] < 0:
+        warnings.append("bad_selection_candidate")
     if metrics["fire_requested_count"] > 0 and metrics["shot_fired_count"] == 0:
         warnings.append("fire_requested_but_no_actual_shots")
     if metrics["fire_requested_count"] == 0:
@@ -351,6 +364,9 @@ def aggregate_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "damage_dealt_ratio",
         "damage_taken_ratio",
         "damage_trade_ratio",
+        "self_dead",
+        "enemy_dead",
+        "timeout",
         "fire_requested_count",
         "fire_request_rate",
         "shot_fired_count",

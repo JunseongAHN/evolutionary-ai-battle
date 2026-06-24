@@ -239,6 +239,24 @@ def test_warning_full_damage_taken():
     assert "agent_lost_all_hp" in warnings
 
 
+def test_warning_positive_reward_without_combat():
+    warnings = analyze_result(_result([_step(0, reward_components={"good_range": 0.1})]))["episodes"][0]["warnings"]
+
+    assert "positive_reward_without_combat" in warnings
+
+
+def test_warning_aim_reward_without_shots():
+    warnings = analyze_result(_result([_step(0, reward_components={"aim_bin_exact": 0.04})]))["episodes"][0]["warnings"]
+
+    assert "aim_reward_without_shots" in warnings
+
+
+def test_warning_range_reward_without_combat():
+    warnings = analyze_result(_result([_step(0, reward_components={"good_range": 0.01})]))["episodes"][0]["warnings"]
+
+    assert "range_reward_without_combat" in warnings
+
+
 def test_training_log_eval_analysis_has_new_keys():
     analysis = analyze_result(
         _result(

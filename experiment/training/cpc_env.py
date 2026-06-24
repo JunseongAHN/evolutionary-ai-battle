@@ -602,25 +602,29 @@ class CPCEnv:
         bullet_expired = any(event.get("type") == "bullet_expired" for event in bullet_events)
         bullet_hit = any(event.get("type") == "bullet_hit" for event in bullet_events)
         shot_fired = bool(bullet_spawned)
+        combat_engaged_this_step = shot_fired or float(damage_dealt) > 0.0 or float(damage_taken) > 0.0
         enemy_hp_loss_ratio = float(damage_dealt) / max(1.0, self.max_hp)
         self_hp_loss_ratio = float(damage_taken) / max(1.0, self.max_hp)
+        episode_done = self._done()
         timeout = self.step_count >= self.max_steps and not enemy_dead and not self_dead
         summary = self.metrics.summary()
         total_damage_dealt_ratio = (float(summary.get("damage_dealt", 0.0)) + float(damage_dealt)) / max(1.0, self.max_hp)
         total_damage_taken_ratio = (float(summary.get("damage_taken", 0.0)) + float(damage_taken)) / max(1.0, self.max_hp)
         prior_shots = int(float(summary.get("shot_fired_count", 0.0)))
         prior_hits = int(float(summary.get("bullet_hit_count", 0.0)))
+        episode_shots = prior_shots + int(shot_fired)
         hit_ratio = (prior_hits + int(bullet_hit)) / max(prior_shots + int(shot_fired), 1)
         components = {
             "damage_dealt_ratio": self.damage_dealt_ratio_weight * enemy_hp_loss_ratio,
             "damage_taken_ratio": self.damage_taken_ratio_weight * self_hp_loss_ratio,
             "bullet_hit": self.bullet_hit_bonus if bullet_hit else 0.0,
             "missed_shot": -self.missed_shot_penalty if bullet_expired and not bullet_hit else 0.0,
-            "aim_bin_exact": self.aim_bin_exact_bonus if aim_bin_error == 0 else 0.0,
+            "aim_bin_exact": self.aim_bin_exact_bonus if shot_fired and aim_bin_error == 0 else 0.0,
             "aim_bin_wrong": -self.aim_bin_wrong_penalty if shot_fired and aim_bin_error >= 2 else 0.0,
-            "good_range": self.good_range_bonus if range_debug["in_good_range"] else 0.0,
+            "aim_alignment": 0.02 * max(0.0, float(aim_debug["aim_alignment"])) if shot_fired else 0.0,
+            "good_range": self.good_range_bonus if combat_engaged_this_step and range_debug["in_good_range"] else 0.0,
             "too_close": -self.too_close_penalty if range_debug["too_close"] else 0.0,
-            "too_far": -self.too_far_penalty if range_debug["too_far"] else 0.0,
+            "too_far": -self.too_far_penalty if range_debug["too_far"] and episode_shots == 0 and self.step_count > 20 else 0.0,
             "kill": self.kill_bonus if enemy_dead else 0.0,
             "death": -self.death_penalty if self_dead else 0.0,
             "timeout_hp_lead": (
@@ -629,6 +633,9 @@ class CPCEnv:
             "accuracy_bonus": (
                 self.accuracy_bonus_weight * hit_ratio * min(total_damage_dealt_ratio, 1.0) if timeout else 0.0
             ),
+            "no_shot_episode": -0.5 if episode_done and episode_shots == 0 else 0.0,
+            "death_without_shooting": -1.0 if self_dead and episode_shots == 0 else 0.0,
+            "death_without_damage": -0.5 if self_dead and total_damage_dealt_ratio == 0.0 else 0.0,
         }
         if self.use_zone_reward:
             zone_debug = self._zone_debug(decoded)

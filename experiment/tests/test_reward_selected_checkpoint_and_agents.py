@@ -19,7 +19,7 @@ from policy_agent import PPOPolicyAgent
 from run_model_agents import run_two_agent_eval
 from training.cpc_actions import AIM_BINS, FIRE_BINS, MOVE_BINS
 from training.cpc_env import CPCEnv
-from training.train_ppo import PPOConfig, train_ppo
+from training.train_ppo import PPOConfig, stage1_combat_quality_score, train_ppo
 
 
 def tiny_cfg(tmp_path: pathlib.Path) -> PPOConfig:
@@ -46,10 +46,47 @@ def test_checkpoint_max_reward_is_saved(tmp_path):
     assert pathlib.Path(result["selected_reward_checkpoint"]).exists()
 
     metadata = json.loads(pathlib.Path(result["selected_reward_checkpoint"]).read_text(encoding="utf-8"))
-    assert metadata["selection_metric"] == "eval_mean_episode_reward"
+    assert metadata["selection_metric"] == "stage1_combat_quality"
     assert metadata["selection_mode"] == "max"
     assert metadata["selection_value"] is not None
     assert metadata["selected_update"] is not None
+
+
+def test_selection_value_uses_combat_quality():
+    analysis = {
+        "aggregate": {
+            "total_reward": 0.9,
+            "damage_trade_ratio": -1.0,
+            "damage_dealt_ratio": 0.0,
+            "bullet_hit_per_shot": 0.0,
+            "warnings": {"positive_reward_without_combat": 4},
+        }
+    }
+
+    assert stage1_combat_quality_score(analysis) < 0.0
+
+
+def test_checkpoint_not_selected_by_hacked_positive_reward():
+    hacked = {
+        "aggregate": {
+            "total_reward": 0.9,
+            "damage_trade_ratio": -1.0,
+            "damage_dealt_ratio": 0.0,
+            "bullet_hit_per_shot": 0.0,
+            "warnings": {"positive_reward_without_combat": 4},
+        }
+    }
+    better_combat = {
+        "aggregate": {
+            "total_reward": -0.1,
+            "damage_trade_ratio": -0.2,
+            "damage_dealt_ratio": 0.2,
+            "bullet_hit_per_shot": 0.3,
+            "warnings": {},
+        }
+    }
+
+    assert stage1_combat_quality_score(better_combat) > stage1_combat_quality_score(hacked)
 
 
 def test_selected_checkpoint_uses_max_reward(tmp_path):

@@ -71,7 +71,7 @@ class PPOConfig:
     bullet_range: float = 280.0
     bullet_damage: float = 10.0
     bullet_hit_radius: float = 12.0
-    selection_metric: str = "eval_mean_episode_reward"
+    selection_metric: str = "stage1_combat_quality"
     selection_mode: str = "max"
     selection_eval_episodes: int = 2
     eval_analysis_interval_steps: int = 10000
@@ -307,6 +307,8 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         )
         losses = ppo_update(policy, optimizer, rollout, advantages, returns, cfg)
         eval_mean_episode_reward = None
+        eval_analysis = None
+        eval_analysis_path = None
         if cfg.selection_metric == "eval_mean_episode_reward":
             eval_mean_episode_reward = evaluate_policy_mean_return(
                 policy,
@@ -315,25 +317,36 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
                 device=device,
                 seed_offset=len(rows) * max(1, cfg.selection_eval_episodes),
             )
-        elif cfg.selection_metric != "episodic_return_mean":
-            raise ValueError(
-                "selection_metric must be 'eval_mean_episode_reward' or 'episodic_return_mean', "
-                f"got {cfg.selection_metric!r}"
-            )
-        selection_value = (
-            eval_mean_episode_reward
-            if cfg.selection_metric == "eval_mean_episode_reward"
-            else _mean(rollout["episode_returns"])
-        )
-        eval_analysis = None
-        if next_eval_analysis_step is not None and steps >= next_eval_analysis_step:
+            selection_value = eval_mean_episode_reward
+        elif cfg.selection_metric == "stage1_combat_quality":
             eval_analysis = evaluate_policy_local_combat_analysis(
                 policy,
                 cfg,
-                episodes=cfg.eval_analysis_episodes,
+                episodes=cfg.selection_eval_episodes,
                 device=device,
-                seed_offset=10_000 + len(rows) * max(1, cfg.eval_analysis_episodes),
+                seed_offset=len(rows) * max(1, cfg.selection_eval_episodes),
             )
+            eval_analysis_path = run_dir / f"selection_eval_analysis_step_{steps}.json"
+            eval_analysis_path.write_text(json.dumps(eval_analysis, indent=2, sort_keys=True), encoding="utf-8")
+            eval_mean_episode_reward = float(eval_analysis.get("aggregate", {}).get("total_reward", 0.0))
+            selection_value = stage1_combat_quality_score(eval_analysis)
+        elif cfg.selection_metric == "episodic_return_mean":
+            selection_value = _mean(rollout["episode_returns"])
+        else:
+            raise ValueError(
+                "selection_metric must be 'eval_mean_episode_reward', 'episodic_return_mean', "
+                "'stage1_combat_quality', "
+                f"got {cfg.selection_metric!r}"
+            )
+        if next_eval_analysis_step is not None and steps >= next_eval_analysis_step:
+            if eval_analysis is None:
+                eval_analysis = evaluate_policy_local_combat_analysis(
+                    policy,
+                    cfg,
+                    episodes=cfg.eval_analysis_episodes,
+                    device=device,
+                    seed_offset=10_000 + len(rows) * max(1, cfg.eval_analysis_episodes),
+                )
             eval_analysis_path = run_dir / f"eval_analysis_step_{steps}.json"
             eval_analysis_path.write_text(json.dumps(eval_analysis, indent=2, sort_keys=True), encoding="utf-8")
             while next_eval_analysis_step is not None and steps >= next_eval_analysis_step:
@@ -357,7 +370,7 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         }
         if eval_analysis is not None:
             row.update(_eval_analysis_row(eval_analysis))
-            row["eval_analysis_path"] = str(eval_analysis_path)
+            row["eval_analysis_path"] = "" if eval_analysis_path is None else str(eval_analysis_path)
         save_checkpoint(
             paths["checkpoint_latest"],
             policy=policy,
@@ -396,12 +409,13 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
                 "total_steps": cfg.total_steps,
                 "episodic_return_mean": row["episodic_return_mean"],
                 "eval_mean_episode_reward": row["eval_mean_episode_reward"],
+                "selection_metric": row["selection_metric"],
                 "selection_value": row["selection_value"],
                 "is_selected_checkpoint": row["is_selected_checkpoint"],
             }
             if eval_analysis is not None:
                 progress_payload["eval_analysis"] = eval_analysis["aggregate"]
-                progress_payload["eval_analysis_path"] = str(eval_analysis_path)
+                progress_payload["eval_analysis_path"] = "" if eval_analysis_path is None else str(eval_analysis_path)
             print(
                 json.dumps(progress_payload),
                 file=sys.stderr,
@@ -585,6 +599,20 @@ def _reward_components_from_td(td) -> dict[str, float]:
         except Exception:
             components[f"reward_{key}"] = 0.0
     return components
+
+
+def stage1_combat_quality_score(analysis: dict[str, Any]) -> float:
+    aggregate = analysis.get("aggregate", {})
+    warning_count = sum(int(value) for value in aggregate.get("warnings", {}).values())
+    damage_trade_ratio = float(aggregate.get("damage_trade_ratio", 0.0))
+    bullet_hit_per_shot = float(aggregate.get("bullet_hit_per_shot", 0.0))
+    damage_dealt_ratio = float(aggregate.get("damage_dealt_ratio", 0.0))
+    return (
+        damage_trade_ratio
+        + (0.20 * bullet_hit_per_shot)
+        + (0.10 * min(damage_dealt_ratio, 1.0))
+        - (0.05 * warning_count)
+    )
 
 
 def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:

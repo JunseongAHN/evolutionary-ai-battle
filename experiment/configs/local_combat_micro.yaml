@@ -25,7 +25,9 @@ num_epochs: 4
 minibatch_size: 256
 hidden_dim: 128
 run_dir: experiment/runs
-selection_metric: eval_mean_episode_reward
+checkpoint_selection:
+  metric: stage1_combat_quality
+selection_metric: stage1_combat_quality
 selection_mode: max
 selection_eval_episodes: 5
 eval_analysis_interval_steps: 10000
