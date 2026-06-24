@@ -129,6 +129,8 @@ class CPCEnv:
         enemy_move: bool = True,
         enemy_fire: bool = True,
         stationary_target_mode: bool = False,
+        enemy_spawn_distance_min: float | None = None,
+        enemy_spawn_distance_max: float | None = None,
         fire_interval_steps: int | None = None,
         bullet_speed: float | None = None,
         bullet_range: float | None = None,
@@ -143,6 +145,12 @@ class CPCEnv:
         self.enemy_move = bool(enemy_move)
         self.enemy_fire = bool(enemy_fire)
         self.stationary_target_mode = bool(stationary_target_mode)
+        self.enemy_spawn_distance_min = (
+            float(enemy_spawn_distance_min) if enemy_spawn_distance_min is not None else None
+        )
+        self.enemy_spawn_distance_max = (
+            float(enemy_spawn_distance_max) if enemy_spawn_distance_max is not None else None
+        )
         if fire_interval_steps is not None:
             self.fire_interval_steps = int(fire_interval_steps)
         if bullet_speed is not None:
@@ -369,6 +377,8 @@ class CPCEnv:
                 "enemy_move": self.enemy_move,
                 "enemy_fire": self.enemy_fire,
                 "stationary_target_mode": self.stationary_target_mode,
+                "enemy_spawn_distance_min": self.enemy_spawn_distance_min,
+                "enemy_spawn_distance_max": self.enemy_spawn_distance_max,
             },
             "combat": {
                 "fire_range": self.fire_range,
@@ -766,7 +776,13 @@ class CPCEnv:
 
     def _spawn_positions(self) -> dict[str, Vec2]:
         angle = self._spawn_angle()
-        distance = self.rng.uniform(0.8 * self.fire_range, 1.2 * self.fire_range)
+        if self.enemy_spawn_distance_min is not None or self.enemy_spawn_distance_max is not None:
+            low = self.enemy_spawn_distance_min if self.enemy_spawn_distance_min is not None else 0.8 * self.fire_range
+            high = self.enemy_spawn_distance_max if self.enemy_spawn_distance_max is not None else 1.2 * self.fire_range
+        else:
+            low = 0.8 * self.fire_range
+            high = 1.2 * self.fire_range
+        distance = self.rng.uniform(float(low), float(high))
         self_pos = {"x": 430.0, "y": 500.0}
         enemy_pos = {
             "x": self._clamp(self_pos["x"] + math.cos(angle) * distance, 0.0, self.width),

@@ -28,6 +28,34 @@ def test_stationary_target_config_sets_enemy_flags():
     assert cfg.stationary_target_mode is True
 
 
+def test_in_range_config_spawns_enemy_within_bullet_range():
+    cfg = load_config("experiment/configs/local_combat_in_range.yaml")
+    env = TorchRLCPCEnv(
+        seed=7,
+        max_steps=8,
+        device="cpu",
+        randomize_enemy_spawn_direction=cfg.randomize_enemy_spawn_direction,
+        enemy_spawn_directions=cfg.enemy_spawn_directions,
+        enemy_spawn_distance_min=cfg.enemy_spawn_distance_min,
+        enemy_spawn_distance_max=cfg.enemy_spawn_distance_max,
+        enemy_move=cfg.enemy_move,
+        enemy_fire=cfg.enemy_fire,
+        stationary_target_mode=cfg.stationary_target_mode,
+        bullet_range=cfg.bullet_range,
+        fire_interval_steps=cfg.fire_interval_steps,
+        bullet_speed=cfg.bullet_speed,
+        bullet_damage=cfg.bullet_damage,
+        bullet_hit_radius=cfg.bullet_hit_radius,
+    )
+
+    for _ in range(5):
+        td = env.reset()
+        distance = float(td["distance_to_enemy"].reshape(-1)[0].item())
+        assert distance < float(cfg.bullet_range)
+        assert distance >= float(cfg.enemy_spawn_distance_min)
+        assert distance <= float(cfg.enemy_spawn_distance_max)
+
+
 def test_stationary_target_env_keeps_enemy_still_and_damage_taken_zero():
     env = TorchRLCPCEnv(
         seed=7,
