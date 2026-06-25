@@ -44,6 +44,7 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     steps = episode.get("steps", [])
     total_steps = max(1, len(steps))
     final_metrics = episode.get("final_metrics", {})
+    bullet_range = _safe_float((config or {}).get("bullet_range"))
     total_reward = float(episode.get("episode_return", {}).get("agent", sum(float(step.get("reward", 0.0)) for step in steps)))
 
     component_stats = defaultdict(_component_stats)
@@ -66,6 +67,8 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     miss_too_far_count = 0
     distance_sum = 0.0
     distance_count = 0
+    max_distance_to_enemy = 0.0
+    distance_over_bullet_range_count = 0
     damage_taken_too_close_count = 0
 
     bullets: dict[str, dict[str, Any]] = {}
@@ -113,6 +116,9 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         if distance is not None:
             distance_sum += distance
             distance_count += 1
+            max_distance_to_enemy = max(max_distance_to_enemy, distance)
+            if bullet_range is not None and distance > bullet_range:
+                distance_over_bullet_range_count += 1
         if range_info.get("in_good_range"):
             range_counts["good"] += 1
         elif range_info.get("too_close"):
@@ -270,6 +276,10 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "too_close_rate": range_counts["too_close"] / total_steps,
         "too_far_rate": range_counts["too_far"] / total_steps,
         "avg_distance_to_enemy": distance_sum / max(distance_count, 1),
+        "max_distance_to_enemy": max_distance_to_enemy,
+        "bullet_range": float(bullet_range or 0.0),
+        "distance_over_bullet_range_rate": distance_over_bullet_range_count / max(distance_count, 1),
+        "within_bullet_range_rate": 1.0 - (distance_over_bullet_range_count / max(distance_count, 1)),
         "shot_too_close_rate": shot_range_counts["too_close"] / max(shot_fired_count, 1),
         "shot_too_far_rate": shot_range_counts["too_far"] / max(shot_fired_count, 1),
         "shot_good_range_rate": shot_range_counts["good"] / max(shot_fired_count, 1),

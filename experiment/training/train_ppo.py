@@ -612,16 +612,17 @@ def evaluate_policy_local_combat_analysis(
         {
             "schema_version": "cpc-common-v0",
             "source": "train_ppo_eval_analysis",
-            "config": {
-                "episodes": max(1, int(episodes)),
-                "max_steps": int(cfg.max_episode_steps),
-                "stage": cfg.stage,
-                "enemy_move": bool(cfg.enemy_move),
-                "enemy_fire": bool(cfg.enemy_fire),
-                "stationary_target_mode": bool(cfg.stationary_target_mode),
-            },
-            "episodes": result_episodes,
-        }
+        "config": {
+            "episodes": max(1, int(episodes)),
+            "max_steps": int(cfg.max_episode_steps),
+            "stage": cfg.stage,
+            "enemy_move": bool(cfg.enemy_move),
+            "enemy_fire": bool(cfg.enemy_fire),
+            "stationary_target_mode": bool(cfg.stationary_target_mode),
+            "bullet_range": float(cfg.bullet_range),
+        },
+        "episodes": result_episodes,
+    }
     )
 
 
@@ -678,6 +679,11 @@ def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
         "eval_analysis_damage_dealt_ratio": float(aggregate.get("damage_dealt_ratio", 0.0)),
         "eval_analysis_damage_taken_ratio": float(aggregate.get("damage_taken_ratio", 0.0)),
         "eval_analysis_damage_trade_ratio": float(aggregate.get("damage_trade_ratio", 0.0)),
+        "eval_analysis_bullet_range": float(aggregate.get("bullet_range", 0.0)),
+        "eval_analysis_avg_distance_to_enemy": float(aggregate.get("avg_distance_to_enemy", 0.0)),
+        "eval_analysis_max_distance_to_enemy": float(aggregate.get("max_distance_to_enemy", 0.0)),
+        "eval_analysis_distance_over_bullet_range_rate": float(aggregate.get("distance_over_bullet_range_rate", 0.0)),
+        "eval_analysis_within_bullet_range_rate": float(aggregate.get("within_bullet_range_rate", 0.0)),
         "eval_analysis_enemy_move": float(bool(config.get("enemy_move", True))),
         "eval_analysis_enemy_fire": float(bool(config.get("enemy_fire", True))),
         "eval_analysis_stationary_target_mode": float(bool(config.get("stationary_target_mode", False))),
@@ -783,6 +789,11 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "eval_analysis_damage_dealt_ratio",
         "eval_analysis_damage_taken_ratio",
         "eval_analysis_damage_trade_ratio",
+        "eval_analysis_bullet_range",
+        "eval_analysis_avg_distance_to_enemy",
+        "eval_analysis_max_distance_to_enemy",
+        "eval_analysis_distance_over_bullet_range_rate",
+        "eval_analysis_within_bullet_range_rate",
         "eval_analysis_enemy_move",
         "eval_analysis_enemy_fire",
         "eval_analysis_stationary_target_mode",

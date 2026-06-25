@@ -207,19 +207,20 @@ class CPCEnv:
             "fire": int(action["fire"]),
         }
         decoded = decode_action(raw_action)
+        effective_decoded = self._effective_decoded_action(decoded)
         previous_ally_distance = self._distance(self.state["self_pos"], self.state["ally_pos"])
         previous_enemy_distance = self._distance(self.state["self_pos"], self.state["enemy_pos"])
         previous_enemy_hp = float(self.state["enemy_hp"])
         previous_self_hp = float(self.state["self_hp"])
 
-        self._move_self(decoded["moveX"], decoded["moveY"])
+        self._move_self(effective_decoded["moveX"], effective_decoded["moveY"])
         ally_under_pressure = self._ally_under_pressure()
         self._script_enemy_pressure()
 
         damage_dealt, bullet_events = self._update_bullets()
         cooldown_before = int(self.weapon["cooldown_remaining_steps"])
-        fire_requested = bool(decoded["fire"])
-        bullet_spawned, fire_blocked_reason, spawn_event = self._try_spawn_bullet(decoded)
+        fire_requested = bool(effective_decoded["fire"])
+        bullet_spawned, fire_blocked_reason, spawn_event = self._try_spawn_bullet(effective_decoded)
         if spawn_event is not None:
             bullet_events.append(spawn_event)
         self._tick_weapon_cooldowns()
@@ -232,7 +233,7 @@ class CPCEnv:
         moved_toward_ally = ally_distance < previous_ally_distance
         range_debug = self._range_debug(enemy_distance)
         reward_components = self._reward_components(
-            decoded=decoded,
+            decoded=effective_decoded,
             previous_enemy_distance=previous_enemy_distance,
             enemy_distance=enemy_distance,
             ally_under_pressure=ally_under_pressure,
@@ -248,7 +249,7 @@ class CPCEnv:
             range_debug=range_debug,
         )
         aim_debug = self._aim_debug(raw_action["aim"], decoded)
-        zone_debug = self._zone_debug(decoded)
+        zone_debug = self._zone_debug(effective_decoded)
         self.last_aim_debug = aim_debug
         self.last_zone_debug = zone_debug
         reward = sum(reward_components.values())
@@ -283,7 +284,7 @@ class CPCEnv:
             near_edge_outward=reward_components.get("near_edge_outward", 0.0) < 0.0,
         )
         info = {
-            "decoded_action": decoded,
+            "decoded_action": effective_decoded,
             "raw_action": dict(raw_action),
             "reward_components": reward_components,
             "metrics": self.metrics.summary(),
@@ -316,7 +317,7 @@ class CPCEnv:
             "bullets": deepcopy(self.projectiles),
             "projectiles": deepcopy(self.projectiles),
         }
-        self.trajectory.append(self._trajectory_step(raw_action, decoded, obs, reward, done, info))
+        self.trajectory.append(self._trajectory_step(raw_action, effective_decoded, obs, reward, done, info))
         return obs, reward, done, info
 
     def observation(self) -> dict[str, Any]:
@@ -434,6 +435,19 @@ class CPCEnv:
         pos = self.state["self_pos"]
         pos["x"] = self._clamp(pos["x"] + move_x * self.move_speed, 0.0, self.width)
         pos["y"] = self._clamp(pos["y"] + move_y * self.move_speed, 0.0, self.height)
+
+    def _effective_decoded_action(self, decoded: dict[str, float]) -> dict[str, float]:
+        if not self._should_freeze_movement():
+            return decoded
+        return {
+            **decoded,
+            "moveX": 0.0,
+            "moveY": 0.0,
+        }
+
+    def _should_freeze_movement(self) -> bool:
+        # Stage 1B keeps the target stationary so evaluation isolates aim + fire.
+        return bool(self.stationary_target_mode and self.stage == "local_combat")
 
     def _script_enemy_pressure(self) -> None:
         if not self.enemy_move:

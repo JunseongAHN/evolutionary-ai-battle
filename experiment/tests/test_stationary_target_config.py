@@ -129,14 +129,18 @@ def test_stationary_target_env_keeps_enemy_still_and_damage_taken_zero():
     )
     obs = env.reset()
     initial_enemy_pos = dict(env.cpc_env.state["enemy_pos"])
+    initial_self_pos = dict(env.cpc_env.state["self_pos"])
 
     step_td = obs.clone()
-    step_td["move"] = torch.tensor(0, dtype=torch.int64)
+    step_td["move"] = torch.tensor(6, dtype=torch.int64)
     step_td["aim"] = torch.tensor(0, dtype=torch.int64)
     step_td["fire"] = torch.tensor(0, dtype=torch.int64)
     next_td = env.step(step_td)["next"]
 
     assert env.cpc_env.state["enemy_pos"] == initial_enemy_pos
+    assert env.cpc_env.state["self_pos"] == initial_self_pos
+    assert float(next_td["decoded_action", "moveX"].reshape(-1)[0].item()) == 0.0
+    assert float(next_td["decoded_action", "moveY"].reshape(-1)[0].item()) == 0.0
     assert float(next_td["metrics", "damage_taken"].reshape(-1)[0].item()) == 0.0
     assert float(next_td["metrics", "damage_taken_ratio"].reshape(-1)[0].item()) == 0.0
 
@@ -170,6 +174,9 @@ def test_stationary_target_training_writes_stationary_fields(tmp_path):
     assert result["last_metrics"]["eval_analysis_enemy_fire"] == 0.0
     assert result["last_metrics"]["eval_analysis_stationary_target_mode"] == 1.0
     assert result["last_metrics"]["eval_analysis_damage_taken"] == 0.0
+    assert result["last_metrics"]["eval_analysis_bullet_range"] == pytest.approx(280.0)
+    assert result["last_metrics"]["eval_analysis_avg_distance_to_enemy"] <= result["last_metrics"]["eval_analysis_bullet_range"]
+    assert result["last_metrics"]["eval_analysis_distance_over_bullet_range_rate"] == 0.0
 
     with pathlib.Path(result["metrics_csv"]).open("r", newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
@@ -181,6 +188,11 @@ def test_stationary_target_training_writes_stationary_fields(tmp_path):
         "enemy_fire",
         "stationary_target_mode",
         "eval_analysis_damage_taken",
+        "eval_analysis_bullet_range",
+        "eval_analysis_avg_distance_to_enemy",
+        "eval_analysis_max_distance_to_enemy",
+        "eval_analysis_distance_over_bullet_range_rate",
+        "eval_analysis_within_bullet_range_rate",
         "eval_analysis_enemy_move",
         "eval_analysis_enemy_fire",
         "eval_analysis_stationary_target_mode",
@@ -191,3 +203,9 @@ def test_stationary_target_training_writes_stationary_fields(tmp_path):
     assert float(rows[-1]["enemy_move"]) == 0.0
     assert float(rows[-1]["enemy_fire"]) == 0.0
     assert float(rows[-1]["stationary_target_mode"]) == 1.0
+
+    from training.eval_ppo import eval_checkpoint
+
+    report = eval_checkpoint(result["checkpoint"], episodes=2)
+    assert report["bullet_range"] == pytest.approx(280.0)
+    assert report["mean_metrics"]["avg_distance_to_enemy"] <= report["bullet_range"]

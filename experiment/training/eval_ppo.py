@@ -99,6 +99,7 @@ def eval_checkpoint(
         "mean_episode_return": _mean(returns),
         "mean_episode_length": _mean(lengths),
         "mean_metrics": _mean_metrics(metrics),
+        "bullet_range": float(cfg.get("bullet_range", 0.0) or 0.0),
         "episodes": episodes,
         "checkpoint": str(checkpoint),
         "selection_metric": checkpoint_data.get("selection_metric"),
@@ -112,7 +113,15 @@ def eval_checkpoint(
 
 def _metrics_from_td(td) -> dict[str, float]:
     metrics = {}
-    for key in ("avg_ally_distance", "isolation_rate", "damage_dealt", "damage_taken"):
+    for key in (
+        "avg_ally_distance",
+        "isolation_rate",
+        "damage_dealt",
+        "damage_taken",
+        "avg_distance_to_enemy",
+        "good_range_rate",
+        "too_far_rate",
+    ):
         try:
             metrics[key] = float(td["metrics", key].reshape(-1)[0].item())
         except Exception:
@@ -127,7 +136,15 @@ def _mean(values: list[float] | list[int]) -> float:
 
 
 def _mean_metrics(metrics: list[dict[str, float]]) -> dict[str, float]:
-    keys = ("avg_ally_distance", "isolation_rate", "damage_dealt", "damage_taken")
+    keys = (
+        "avg_ally_distance",
+        "isolation_rate",
+        "damage_dealt",
+        "damage_taken",
+        "avg_distance_to_enemy",
+        "good_range_rate",
+        "too_far_rate",
+    )
     return {key: _mean([item.get(key, 0.0) for item in metrics]) for key in keys}
 
 
