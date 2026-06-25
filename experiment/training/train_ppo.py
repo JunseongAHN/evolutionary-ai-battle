@@ -410,6 +410,7 @@ def train_ppo(cfg: PPOConfig, *, progress: bool = False) -> dict[str, Any]:
         }
         if eval_analysis is not None:
             row.update(_eval_analysis_row(eval_analysis))
+            row["eval_analysis_bullet_range"] = float(cfg.bullet_range)
             row["eval_analysis_path"] = "" if eval_analysis_path is None else str(eval_analysis_path)
         save_checkpoint(
             paths["checkpoint_latest"],
@@ -634,6 +635,15 @@ def evaluate_policy_local_combat_analysis(
             "episodes": result_episodes,
         }
     )
+    analysis["config"] = {
+        "episodes": max(1, int(episodes)),
+        "max_steps": int(cfg.max_episode_steps),
+        "stage": cfg.stage,
+        "enemy_move": bool(cfg.enemy_move),
+        "enemy_fire": bool(cfg.enemy_fire),
+        "stationary_target_mode": bool(cfg.stationary_target_mode),
+        "bullet_range": float(cfg.bullet_range),
+    }
     mean_fire_logits = fire_logits_sum / float(max(total_steps, 1))
     mean_fire_probs = fire_probs_sum / float(max(total_steps, 1))
     analysis["fire_diagnostics"] = {
@@ -681,10 +691,17 @@ def stage1_combat_quality_score(analysis: dict[str, Any]) -> float:
     warning_count = sum(int(value) for value in aggregate.get("warnings", {}).values())
     damage_trade_ratio = float(aggregate.get("damage_trade_ratio", 0.0))
     bullet_hit_per_shot = float(aggregate.get("bullet_hit_per_shot", 0.0))
+    bullet_hit_per_valid_shot = float(aggregate.get("bullet_hit_per_valid_shot", 0.0))
     damage_dealt_ratio = float(aggregate.get("damage_dealt_ratio", 0.0))
+    shot_fired_count = float(aggregate.get("shot_fired_count", 0.0))
+    shot_fired_when_valid_count = float(aggregate.get("shot_fired_when_valid_count", 0.0))
+    fire_valid_rate = float(aggregate.get("fire_valid_rate", 0.0))
+    if shot_fired_count <= 0.0 or shot_fired_when_valid_count <= 0.0 or fire_valid_rate <= 0.0:
+        return -1000.0 - float(warning_count)
     return (
         damage_trade_ratio
         + (0.20 * bullet_hit_per_shot)
+        + (0.30 * bullet_hit_per_valid_shot)
         + (0.10 * min(damage_dealt_ratio, 1.0))
         - (0.05 * warning_count)
     )
@@ -703,7 +720,7 @@ def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
         "eval_analysis_damage_dealt_ratio": float(aggregate.get("damage_dealt_ratio", 0.0)),
         "eval_analysis_damage_taken_ratio": float(aggregate.get("damage_taken_ratio", 0.0)),
         "eval_analysis_damage_trade_ratio": float(aggregate.get("damage_trade_ratio", 0.0)),
-        "eval_analysis_bullet_range": float(aggregate.get("bullet_range", 0.0)),
+        "eval_analysis_bullet_range": float(config.get("bullet_range", 0.0)),
         "eval_analysis_avg_distance_to_enemy": float(aggregate.get("avg_distance_to_enemy", 0.0)),
         "eval_analysis_max_distance_to_enemy": float(aggregate.get("max_distance_to_enemy", 0.0)),
         "eval_analysis_distance_over_bullet_range_rate": float(aggregate.get("distance_over_bullet_range_rate", 0.0)),
@@ -719,7 +736,9 @@ def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
         "eval_analysis_stationary_target_mode": float(bool(config.get("stationary_target_mode", False))),
         "eval_analysis_fire_requested_count": float(aggregate.get("fire_requested_count", 0.0)),
         "eval_analysis_shot_fired_count": float(aggregate.get("shot_fired_count", 0.0)),
+        "eval_analysis_shot_fired_when_valid_count": float(aggregate.get("shot_fired_when_valid_count", 0.0)),
         "eval_analysis_fire_blocked_cooldown_count": float(aggregate.get("fire_blocked_cooldown_count", 0.0)),
+        "eval_analysis_cooldown_blocked_fire_count": float(aggregate.get("cooldown_blocked_fire_count", 0.0)),
         "eval_analysis_self_bullet_spawn_count": float(aggregate.get("self_bullet_spawn_count", 0.0)),
         "eval_analysis_self_bullet_hit_count": float(aggregate.get("self_bullet_hit_count", 0.0)),
         "eval_analysis_self_bullet_missed_count": float(aggregate.get("self_bullet_missed_count", 0.0)),
@@ -729,10 +748,22 @@ def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
         "eval_analysis_hit_ratio": float(aggregate.get("hit_ratio", 0.0)),
         "eval_analysis_missed_shot_rate": float(aggregate.get("missed_shot_rate", 0.0)),
         "eval_analysis_bullet_hit_per_shot": float(aggregate.get("bullet_hit_per_shot", 0.0)),
+        "eval_analysis_bullet_hit_per_valid_shot": float(aggregate.get("bullet_hit_per_valid_shot", 0.0)),
         "eval_analysis_aim_bin_0_rate": float(aggregate.get("aim_bin_0_rate", 0.0)),
+        "eval_analysis_current_aim_bin": float(aggregate.get("current_aim_bin", 0.0) or 0.0),
+        "eval_analysis_current_aim_bin_rate": float(aggregate.get("current_aim_bin_rate", 0.0)),
         "eval_analysis_dominant_aim_bin": float(aggregate.get("dominant_aim_bin", 0.0) or 0.0),
         "eval_analysis_dominant_aim_bin_rate": float(aggregate.get("dominant_aim_bin_rate", 0.0)),
         "eval_analysis_exact_aim_match_rate": float(aggregate.get("exact_aim_match_rate", 0.0)),
+        "eval_analysis_aim_error": float(aggregate.get("aim_error", 0.0)),
+        "eval_analysis_aim_aligned_rate": float(aggregate.get("aim_aligned_rate", 0.0)),
+        "eval_analysis_target_in_range_rate": float(aggregate.get("target_in_range_rate", 0.0)),
+        "eval_analysis_cooldown_ready_rate": float(aggregate.get("cooldown_ready_rate", 0.0)),
+        "eval_analysis_fire_valid_rate": float(aggregate.get("fire_valid_rate", 0.0)),
+        "eval_analysis_valid_fire_requested_count": float(aggregate.get("valid_fire_requested_count", 0.0)),
+        "eval_analysis_invalid_fire_requested_count": float(aggregate.get("invalid_fire_requested_count", 0.0)),
+        "eval_analysis_blocked_invalid_fire_count": float(aggregate.get("blocked_invalid_fire_count", 0.0)),
+        "eval_analysis_no_fire_when_valid_count": float(aggregate.get("no_fire_when_valid_count", 0.0)),
         "eval_analysis_shot_exact_aim_rate": float(aggregate.get("shot_exact_aim_rate", 0.0)),
         "eval_analysis_good_range_rate": float(aggregate.get("good_range_rate", 0.0)),
         "eval_analysis_shot_good_range_rate": float(aggregate.get("shot_good_range_rate", 0.0)),
@@ -760,10 +791,16 @@ def _compact_eval_step(
         },
         "aim": {
             "aim_bin": info.get("aim_debug", {}).get("aim_bin"),
+            "current_aim_bin": info.get("fire_debug", {}).get("current_aim_bin"),
             "ideal_aim_bin": info.get("aim_debug", {}).get("ideal_aim_bin"),
             "aim_bin_error": info.get("aim_debug", {}).get("aim_bin_error"),
             "alignment": info.get("aim_debug", {}).get("aim_alignment", 0.0),
             "angle_error_deg": info.get("aim_debug", {}).get("angle_error_deg", 0.0),
+            "aim_error": info.get("fire_debug", {}).get("aim_error"),
+            "aim_aligned": info.get("fire_debug", {}).get("aim_aligned", False),
+            "target_in_range": info.get("fire_debug", {}).get("target_in_range", False),
+            "cooldown_ready": info.get("fire_debug", {}).get("cooldown_ready", False),
+            "fire_valid": info.get("fire_debug", {}).get("fire_valid", False),
         },
         "fire": {
             "requested": info.get("fire", {}).get("fire_requested", False),
@@ -771,6 +808,13 @@ def _compact_eval_step(
             "blocked_reason": info.get("fire", {}).get("fire_blocked_reason"),
             "cooldown_before": info.get("fire", {}).get("cooldown_remaining_steps_before"),
             "cooldown_after": info.get("fire", {}).get("cooldown_remaining_steps_after"),
+            "fire_valid": info.get("fire", {}).get("fire_valid", False),
+            "target_in_range": info.get("fire", {}).get("target_in_range", False),
+            "cooldown_ready": info.get("fire", {}).get("cooldown_ready", False),
+            "aim_aligned": info.get("fire", {}).get("aim_aligned", False),
+            "current_aim_bin": info.get("fire", {}).get("current_aim_bin"),
+            "ideal_aim_bin": info.get("fire", {}).get("ideal_aim_bin"),
+            "aim_error": info.get("fire", {}).get("aim_error"),
         },
         "range": info.get("range_debug", {}),
         "events": info.get("bullet_events", []),
@@ -835,7 +879,9 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "eval_analysis_stationary_target_mode",
         "eval_analysis_fire_requested_count",
         "eval_analysis_shot_fired_count",
+        "eval_analysis_shot_fired_when_valid_count",
         "eval_analysis_fire_blocked_cooldown_count",
+        "eval_analysis_cooldown_blocked_fire_count",
         "eval_analysis_self_bullet_spawn_count",
         "eval_analysis_self_bullet_hit_count",
         "eval_analysis_self_bullet_missed_count",
@@ -845,10 +891,22 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "eval_analysis_hit_ratio",
         "eval_analysis_missed_shot_rate",
         "eval_analysis_bullet_hit_per_shot",
+        "eval_analysis_bullet_hit_per_valid_shot",
         "eval_analysis_aim_bin_0_rate",
+        "eval_analysis_current_aim_bin",
+        "eval_analysis_current_aim_bin_rate",
         "eval_analysis_dominant_aim_bin",
         "eval_analysis_dominant_aim_bin_rate",
         "eval_analysis_exact_aim_match_rate",
+        "eval_analysis_aim_error",
+        "eval_analysis_aim_aligned_rate",
+        "eval_analysis_target_in_range_rate",
+        "eval_analysis_cooldown_ready_rate",
+        "eval_analysis_fire_valid_rate",
+        "eval_analysis_valid_fire_requested_count",
+        "eval_analysis_invalid_fire_requested_count",
+        "eval_analysis_blocked_invalid_fire_count",
+        "eval_analysis_no_fire_when_valid_count",
         "eval_analysis_shot_exact_aim_rate",
         "eval_analysis_good_range_rate",
         "eval_analysis_shot_good_range_rate",

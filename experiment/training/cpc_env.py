@@ -173,6 +173,8 @@ class CPCEnv:
         self.weapon: dict[str, Any] = {}
         self.last_aim_debug: dict[str, Any] = {}
         self.last_zone_debug: dict[str, Any] = {}
+        self.last_fire_debug: dict[str, Any] = {}
+        self.current_aim_bin: int = 0
         self.reset(seed=seed)
 
     def reset(self, seed: int | None = None) -> dict[str, Any]:
@@ -185,6 +187,8 @@ class CPCEnv:
         self.projectiles = []
         self.last_aim_debug = {}
         self.last_zone_debug = {}
+        self.last_fire_debug = {}
+        self.current_aim_bin = 0
         self.weapon = {
             "cooldown_remaining_steps": 0,
             "fire_interval_steps": self.fire_interval_steps,
@@ -214,13 +218,33 @@ class CPCEnv:
         previous_self_hp = float(self.state["self_hp"])
 
         self._move_self(effective_decoded["moveX"], effective_decoded["moveY"])
+        self.current_aim_bin = int(raw_action["aim"])
         ally_under_pressure = self._ally_under_pressure()
         self._script_enemy_pressure()
 
         damage_dealt, bullet_events = self._update_bullets()
         cooldown_before = int(self.weapon["cooldown_remaining_steps"])
         fire_requested = bool(effective_decoded["fire"])
-        bullet_spawned, fire_blocked_reason, spawn_event = self._try_spawn_bullet(effective_decoded)
+        enemy_distance = self._distance(self.state["self_pos"], self.state["enemy_pos"])
+        range_debug = self._range_debug(enemy_distance)
+        aim_debug = self._aim_debug(self.current_aim_bin, effective_decoded)
+        fire_debug = self._fire_valid_debug(
+            aim_debug=aim_debug,
+            range_debug=range_debug,
+            cooldown_ready=cooldown_before <= 0,
+        )
+        if self.stationary_target_mode and fire_requested and not fire_debug["fire_valid"]:
+            fire_blocked_reason = "cooldown" if not fire_debug["cooldown_ready"] else "invalid_fire"
+            bullet_spawned = False
+            spawn_event = {
+                "type": "bullet_not_spawned",
+                "reason": fire_blocked_reason,
+                "owner_id": "self",
+                "pos": deepcopy(self.state["self_pos"]),
+                "cooldown_remaining_steps": int(self.weapon["cooldown_remaining_steps"]),
+            }
+        else:
+            bullet_spawned, fire_blocked_reason, spawn_event = self._try_spawn_bullet(effective_decoded)
         if spawn_event is not None:
             bullet_events.append(spawn_event)
         self._tick_weapon_cooldowns()
@@ -229,9 +253,7 @@ class CPCEnv:
         self.step_count += 1
 
         ally_distance = self._distance(self.state["self_pos"], self.state["ally_pos"])
-        enemy_distance = self._distance(self.state["self_pos"], self.state["enemy_pos"])
         moved_toward_ally = ally_distance < previous_ally_distance
-        range_debug = self._range_debug(enemy_distance)
         reward_components = self._reward_components(
             decoded=effective_decoded,
             previous_enemy_distance=previous_enemy_distance,
@@ -242,16 +264,18 @@ class CPCEnv:
             previous_enemy_hp=previous_enemy_hp,
             previous_self_hp=previous_self_hp,
             fire_requested=fire_requested,
-            can_fire=cooldown_before <= 0,
+            can_fire=fire_debug["cooldown_ready"],
             bullet_spawned=bullet_spawned,
             fire_blocked_reason=fire_blocked_reason,
             bullet_events=bullet_events,
             range_debug=range_debug,
+            aim_debug=aim_debug,
+            fire_debug=fire_debug,
         )
-        aim_debug = self._aim_debug(raw_action["aim"], decoded)
         zone_debug = self._zone_debug(effective_decoded)
         self.last_aim_debug = aim_debug
         self.last_zone_debug = zone_debug
+        self.last_fire_debug = fire_debug
         reward = sum(reward_components.values())
         done = self._done()
         obs = self.observation()
@@ -267,10 +291,23 @@ class CPCEnv:
             reward=reward,
             reward_components=reward_components,
             fire_requested=fire_requested,
+            current_aim_bin=self.current_aim_bin,
             aim_alignment=aim_debug["aim_alignment"],
             aim_bin=int(aim_debug["aim_bin"]),
             ideal_aim_bin=int(aim_debug["ideal_aim_bin"]),
             aim_bin_error=int(aim_debug["aim_bin_error"]),
+            aim_error=int(fire_debug["aim_error"]),
+            aim_aligned=bool(fire_debug["aim_aligned"]),
+            target_in_range=bool(fire_debug["target_in_range"]),
+            cooldown_ready=bool(fire_debug["cooldown_ready"]),
+            fire_valid=bool(fire_debug["fire_valid"]),
+            valid_fire_requested=bool(fire_requested and fire_debug["fire_valid"]),
+            invalid_fire_requested=bool(fire_requested and not fire_debug["fire_valid"]),
+            blocked_invalid_fire=bool(
+                fire_requested and not fire_debug["fire_valid"] and fire_blocked_reason == "invalid_fire"
+            ),
+            no_fire_when_valid=bool((not fire_requested) and fire_debug["fire_valid"]),
+            shot_fired_when_valid=bool(bullet_spawned and fire_debug["fire_valid"]),
             shot_fired=bullet_spawned,
             off_target_shot=bullet_spawned and int(aim_debug["aim_bin_error"]) >= 2,
             bullet_hit=any(event.get("type") == "bullet_hit" for event in bullet_events),
@@ -300,6 +337,7 @@ class CPCEnv:
             },
             "aim_debug": aim_debug,
             "range_debug": range_debug,
+            "fire_debug": fire_debug,
             "zone_debug": zone_debug,
             "fire": {
                 "fire_requested": fire_requested,
@@ -308,6 +346,13 @@ class CPCEnv:
                 "cooldown_remaining_steps_before": cooldown_before,
                 "cooldown_remaining_steps_after": cooldown_after,
                 "fire_interval_steps": int(self.weapon["fire_interval_steps"]),
+                "fire_valid": bool(fire_debug["fire_valid"]),
+                "target_in_range": bool(fire_debug["target_in_range"]),
+                "cooldown_ready": bool(fire_debug["cooldown_ready"]),
+                "aim_aligned": bool(fire_debug["aim_aligned"]),
+                "current_aim_bin": int(self.current_aim_bin),
+                "ideal_aim_bin": int(aim_debug["ideal_aim_bin"]),
+                "aim_error": int(fire_debug["aim_error"]),
             },
             "fire_selected": fire_requested,
             "shot_fired": bullet_spawned,
@@ -326,6 +371,14 @@ class CPCEnv:
         distance_to_center = self._distance(self.state["self_pos"], self.center)
         safe_radius = self._safe_radius()
         safe_margin = safe_radius - distance_to_center
+        aim_debug = self.last_aim_debug or self._aim_debug(self.current_aim_bin, {"aimX": 1.0, "aimY": 0.0, "fire": 0})
+        fire_debug = self.last_fire_debug or {
+            "target_in_range": bool(self._range_debug(self._distance(self.state["self_pos"], self.state["enemy_pos"]))["in_good_range"]),
+            "cooldown_ready": int(self.weapon.get("cooldown_remaining_steps", 0)) <= 0,
+            "aim_aligned": bool(aim_debug.get("is_aim_aligned", False)),
+            "fire_valid": False,
+            "aim_error": int(aim_debug.get("aim_bin_error", 0)),
+        }
         return {
             "self_hp": float(self.state["self_hp"]),
             "ally_hp": float(self.state["ally_hp"]),
@@ -344,6 +397,14 @@ class CPCEnv:
             "target_dir_x": target_dir["x"],
             "target_dir_y": target_dir["y"],
             "aim_alignment": float(self.last_aim_debug.get("aim_alignment", 0.0)),
+            "current_aim_bin": int(self.current_aim_bin),
+            "ideal_aim_bin": int(aim_debug.get("ideal_aim_bin", 0)),
+            "gt_ideal_aim_bin": int(aim_debug.get("ideal_aim_bin", 0)),
+            "aim_error": int(fire_debug.get("aim_error", 0)),
+            "aim_aligned": bool(fire_debug.get("aim_aligned", False)),
+            "target_in_range": bool(fire_debug.get("target_in_range", False)),
+            "cooldown_ready": bool(fire_debug.get("cooldown_ready", False)),
+            "fire_valid": bool(fire_debug.get("fire_valid", False)),
             "distance_to_center": distance_to_center,
             "safe_margin_fraction": safe_margin / max(1.0, safe_radius),
             "outside_safe_zone": distance_to_center > safe_radius,
@@ -426,6 +487,7 @@ class CPCEnv:
                 "outside": self._distance(self.state["self_pos"], self.center) > self._safe_radius(),
             },
             "aim_debug": deepcopy(self.last_aim_debug),
+            "fire_debug": deepcopy(self.last_fire_debug),
             "range_debug": self._range_debug(self._distance(self.state["self_pos"], self.state["enemy_pos"])),
             "zone_debug": deepcopy(self.last_zone_debug),
             "metrics": self.metrics.summary(),
@@ -630,9 +692,10 @@ class CPCEnv:
         fire_blocked_reason: str | None,
         bullet_events: list[dict[str, Any]],
         range_debug: dict[str, Any],
+        aim_debug: dict[str, Any],
+        fire_debug: dict[str, Any],
     ) -> dict[str, float]:
-        del ally_under_pressure, previous_enemy_distance, enemy_distance, fire_requested, can_fire, fire_blocked_reason
-        aim_debug = self._aim_debug(self._aim_bin_from_decoded(decoded), decoded)
+        del ally_under_pressure, previous_enemy_distance, enemy_distance
         aim_bin_error = int(aim_debug["aim_bin_error"])
         self_dead = previous_self_hp > 0.0 and float(self.state["self_hp"]) <= 0.0
         enemy_dead = previous_enemy_hp > 0.0 and float(self.state["enemy_hp"]) <= 0.0
@@ -652,14 +715,21 @@ class CPCEnv:
         episode_shots = prior_shots + int(shot_fired)
         hit_ratio = (prior_hits + int(bullet_hit)) / max(prior_shots + int(shot_fired), 1)
         if self.stationary_target_mode:
+            fire_valid = bool(fire_debug["fire_valid"])
+            shot_fired_reward = 0.03 if shot_fired and fire_valid else 0.0
+            bad_aim_shot_penalty = -0.02 if shot_fired and not fire_debug["aim_aligned"] else 0.0
+            bullet_hit_reward = 0.30 if bullet_hit else 0.0
+            damage_dealt_reward = 1.5 * enemy_hp_loss_ratio
             return {
-                "damage_dealt_ratio": self.damage_dealt_ratio_weight * enemy_hp_loss_ratio,
+                "damage_dealt_ratio": damage_dealt_reward,
                 "damage_taken_ratio": 0.0,
-                "bullet_hit": self.bullet_hit_bonus if bullet_hit else 0.0,
-                "missed_shot": -self.missed_shot_penalty if bullet_expired and not bullet_hit else 0.0,
-                "aim_bin_exact": self.aim_bin_exact_bonus if shot_fired and aim_bin_error == 0 else 0.0,
-                "aim_bin_wrong": -self.aim_bin_wrong_penalty if shot_fired and aim_bin_error >= 2 else 0.0,
-                "aim_alignment": 0.02 * max(0.0, float(aim_debug["aim_alignment"])) if shot_fired else 0.0,
+                "bullet_hit_reward": bullet_hit_reward,
+                "shot_fired_reward": shot_fired_reward,
+                "bad_aim_shot_penalty": bad_aim_shot_penalty,
+                "missed_shot_penalty": -0.02 if shot_fired and bullet_expired and not bullet_hit else 0.0,
+                "no_fire_ready_penalty": -0.01 if fire_valid and not shot_fired else 0.0,
+                "cooldown_blocked_fire_penalty": -0.01 if fire_requested and not fire_debug["cooldown_ready"] else 0.0,
+                "invalid_fire_penalty": -0.05 if fire_requested and not fire_valid and fire_debug["cooldown_ready"] else 0.0,
             }
         components = {
             "damage_dealt_ratio": self.damage_dealt_ratio_weight * enemy_hp_loss_ratio,
@@ -727,6 +797,27 @@ class CPCEnv:
             "is_near_aim": bool(has_enemy and aim_bin_error <= 1),
             "is_bad_aim": bool(has_enemy and aim_bin_error >= 3),
             "is_aim_aligned": bool(has_enemy and aim_bin_error <= 1),
+        }
+
+    def _fire_valid_debug(
+        self,
+        *,
+        aim_debug: dict[str, Any],
+        range_debug: dict[str, Any],
+        cooldown_ready: bool,
+    ) -> dict[str, Any]:
+        aim_error = int(aim_debug.get("aim_bin_error", 0))
+        aim_aligned = bool(aim_error <= 1)
+        target_in_range = bool(range_debug.get("in_good_range", False))
+        fire_valid = bool(target_in_range and cooldown_ready and aim_aligned)
+        return {
+            "current_aim_bin": int(aim_debug.get("aim_bin", 0)),
+            "ideal_aim_bin": int(aim_debug.get("ideal_aim_bin", 0)),
+            "aim_error": aim_error,
+            "aim_aligned": aim_aligned,
+            "target_in_range": target_in_range,
+            "cooldown_ready": bool(cooldown_ready),
+            "fire_valid": fire_valid,
         }
 
     def _target_direction(self) -> dict[str, Any]:

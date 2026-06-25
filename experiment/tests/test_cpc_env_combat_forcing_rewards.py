@@ -240,6 +240,36 @@ def test_bullet_hit_reward_only_on_hit():
     assert miss_info["reward_components"]["bullet_hit"] == 0.0
 
 
+def test_stage1b_uses_stage_specific_fire_shaping():
+    env = CPCEnv(seed=1, max_steps=4, stationary_target_mode=True, enemy_move=False, enemy_fire=False)
+    put_enemy_to_right(env, distance=120.0)
+
+    _, _, _, no_fire_info = env.step(NOOP)
+    _, _, _, shot_info = env.step(FIRE_RIGHT)
+
+    assert no_fire_info["reward_components"]["no_fire_ready_penalty"] < 0.0
+    assert "bullet_hit" not in no_fire_info["reward_components"]
+    assert shot_info["reward_components"]["shot_fired_reward"] > 0.0
+    assert shot_info["reward_components"]["bullet_hit_reward"] == 0.0
+    assert "fire_requested" not in shot_info["reward_components"]
+    assert shot_info["fire"]["fire_valid"] is True
+
+
+def test_stage1b_reward_prefers_actual_shot_over_fire_spam():
+    env = CPCEnv(seed=1, max_steps=4, stationary_target_mode=True, enemy_move=False, enemy_fire=False)
+    put_enemy_to_right(env, distance=120.0)
+
+    _, _, _, first_info = env.step(FIRE_RIGHT)
+    _, _, _, second_info = env.step(FIRE_RIGHT)
+
+    assert first_info["reward_components"]["shot_fired_reward"] > 0.0
+    assert first_info["reward_components"]["no_fire_ready_penalty"] == 0.0
+    assert second_info["fire"]["fire_blocked_reason"] == "cooldown"
+    assert second_info["reward_components"]["shot_fired_reward"] == 0.0
+    assert second_info["reward_components"]["no_fire_ready_penalty"] == 0.0
+    assert second_info["reward_components"]["cooldown_blocked_fire_penalty"] < 0.0
+
+
 def test_bullet_spawns_at_shooter_position():
     env = CPCEnv(seed=1, max_steps=4)
     put_enemy_to_right(env, distance=240.0)
@@ -328,6 +358,36 @@ def test_fire_requested_does_not_always_spawn_bullet():
     assert spawned_count == 1
 
 
+def test_stationary_target_mode_penalizes_no_engagement_at_terminal():
+    env = CPCEnv(seed=1, max_steps=1, stationary_target_mode=True, enemy_move=False, enemy_fire=False)
+    put_enemy_to_right(env, distance=120.0)
+
+    _, reward, done, info = env.step(NOOP)
+
+    assert done is True
+    assert reward < 0.0
+    assert info["reward_components"]["damage_dealt_ratio"] == 0.0
+    assert info["reward_components"]["bullet_hit_reward"] == 0.0
+    assert info["reward_components"]["missed_shot_penalty"] == 0.0
+    assert info["reward_components"]["bad_aim_shot_penalty"] == 0.0
+    assert info["reward_components"]["no_fire_ready_penalty"] < 0.0
+    assert info["fire"]["fire_valid"] is True
+
+
+def test_stage1b_blocks_and_penalizes_invalid_fire():
+    env = CPCEnv(seed=1, max_steps=4, stationary_target_mode=True, enemy_move=False, enemy_fire=False)
+    put_enemy_to_right(env, distance=120.0)
+
+    _, reward, _, info = env.step(FIRE_LEFT)
+
+    assert reward < 0.0
+    assert info["fire"]["fire_valid"] is False
+    assert info["fire"]["fire_blocked_reason"] == "invalid_fire"
+    assert info["fire"]["shot_fired"] is False
+    assert info["reward_components"]["cooldown_blocked_fire_penalty"] == 0.0
+    assert info["reward_components"]["invalid_fire_penalty"] < 0.0
+
+
 def test_cooldown_blocks_repeated_fire():
     env = CPCEnv(seed=1, max_steps=4)
     put_enemy_to_right(env, distance=400.0)
@@ -396,7 +456,22 @@ def test_observation_contains_aim_and_zone_fields():
     env = CPCEnv(seed=1, max_steps=4)
     obs = env.reset(seed=1)
 
-    assert {"target_dir_x", "target_dir_y", "aim_alignment", "distance_to_center", "safe_margin_fraction", "outside_safe_zone"} <= set(obs)
+    assert {
+        "target_dir_x",
+        "target_dir_y",
+        "aim_alignment",
+        "distance_to_center",
+        "safe_margin_fraction",
+        "outside_safe_zone",
+        "current_aim_bin",
+        "ideal_aim_bin",
+        "gt_ideal_aim_bin",
+        "aim_error",
+        "aim_aligned",
+        "target_in_range",
+        "cooldown_ready",
+        "fire_valid",
+    } <= set(obs)
 
 
 def test_randomized_spawn_requires_non_right_aim():
@@ -440,15 +515,27 @@ def test_metrics_include_aim_collapse_indicators():
     for key in (
         "aim_bin_0_rate",
         "aim_bin_entropy",
+        "current_aim_bin_distribution",
         "ideal_aim_bin_distribution",
         "exact_aim_match_rate",
         "within_1_bin_aim_rate",
         "bad_aim_rate",
+        "aim_error",
+        "aim_aligned_rate",
+        "target_in_range_rate",
+        "cooldown_ready_rate",
+        "fire_valid_rate",
         "shot_exact_aim_rate",
         "shot_near_aim_rate",
         "shot_off_target_rate",
         "bullet_hit_per_shot",
+        "bullet_hit_per_valid_shot",
         "shot_fired_count",
+        "shot_fired_when_valid_count",
+        "valid_fire_requested_count",
+        "invalid_fire_requested_count",
+        "blocked_invalid_fire_count",
+        "no_fire_when_valid_count",
     ):
         assert key in summary
 

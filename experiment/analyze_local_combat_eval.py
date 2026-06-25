@@ -52,10 +52,12 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     damage_taken = 0.0
     fire_requested_count = 0
     shot_fired_count = 0
+    shot_fired_when_valid_count = 0
     fire_blocked_count = 0
     fire_blocked_cooldown_count = 0
     fire_blocked_other_count = 0
     aim_bins = Counter()
+    current_aim_bins = Counter()
     ideal_aim_bins = Counter()
     aim_errors = Counter()
     shot_aim_errors = Counter()
@@ -70,6 +72,14 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
     max_distance_to_enemy = 0.0
     distance_over_bullet_range_count = 0
     damage_taken_too_close_count = 0
+    aim_aligned_count = 0
+    target_in_range_count = 0
+    cooldown_ready_count = 0
+    fire_valid_count = 0
+    valid_fire_requested_count = 0
+    invalid_fire_requested_count = 0
+    blocked_invalid_fire_count = 0
+    no_fire_when_valid_count = 0
 
     bullets: dict[str, dict[str, Any]] = {}
 
@@ -90,6 +100,25 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         shot_fired = bool(fire.get("shot_fired", False))
         if shot_fired:
             shot_fired_count += 1
+        fire_valid = bool(fire.get("fire_valid", False))
+        target_in_range = bool(fire.get("target_in_range", False))
+        cooldown_ready = bool(fire.get("cooldown_ready", False))
+        if fire_valid:
+            fire_valid_count += 1
+        if target_in_range:
+            target_in_range_count += 1
+        if cooldown_ready:
+            cooldown_ready_count += 1
+        if fire.get("valid_fire_requested", False):
+            valid_fire_requested_count += 1
+        if fire.get("invalid_fire_requested", False):
+            invalid_fire_requested_count += 1
+        if fire.get("blocked_invalid_fire", False):
+            blocked_invalid_fire_count += 1
+        if fire.get("no_fire_when_valid", False):
+            no_fire_when_valid_count += 1
+        if shot_fired and fire_valid:
+            shot_fired_when_valid_count += 1
         if fire_requested and not shot_fired:
             fire_blocked_count += 1
             blocked_reason = fire.get("blocked_reason")
@@ -100,14 +129,21 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
 
         aim = step.get("aim", {})
         aim_bin = _safe_int(aim.get("aim_bin"))
+        current_aim_bin = _safe_int(aim.get("current_aim_bin"))
         ideal_aim_bin = _safe_int(aim.get("ideal_aim_bin"))
         aim_error = _safe_int(aim.get("aim_bin_error"))
         if aim_bin is not None:
             aim_bins[aim_bin] += 1
+        if current_aim_bin is not None:
+            current_aim_bins[current_aim_bin] += 1
+        elif aim_bin is not None:
+            current_aim_bins[aim_bin] += 1
         if ideal_aim_bin is not None:
             ideal_aim_bins[ideal_aim_bin] += 1
         if aim_error is not None:
             aim_errors[aim_error] += 1
+        if fire_valid and aim_error is not None and aim_error <= 1:
+            aim_aligned_count += 1
             if shot_fired:
                 shot_aim_errors[aim_error] += 1
 
@@ -237,9 +273,11 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "fire_request_rate": fire_requested_count / total_steps,
         "shot_fired_count": shot_fired_count,
         "shot_fired_rate": shot_fired_count / total_steps,
+        "shot_fired_when_valid_count": shot_fired_when_valid_count,
         "fire_blocked_count": fire_blocked_count,
         "fire_blocked_cooldown_count": fire_blocked_cooldown_count,
         "fire_blocked_other_count": fire_blocked_other_count,
+        "cooldown_blocked_fire_count": fire_blocked_cooldown_count,
         "shot_fired_per_fire_request": shot_fired_count / max(fire_requested_count, 1),
         "self_bullet_spawn_count": self_bullet_spawn_count,
         "self_bullet_hit_count": self_bullet_hit_count,
@@ -257,14 +295,20 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "bullet_hit_per_shot": hit_ratio,
         "shot_efficiency": hit_ratio * min(damage_dealt_ratio, 1.0),
         "aim_bin_distribution": dict(sorted(aim_bins.items())),
+        "current_aim_bin_distribution": dict(sorted(current_aim_bins.items())),
         "ideal_aim_bin_distribution": dict(sorted(ideal_aim_bins.items())),
         "aim_bin_0_rate": aim_bins.get(0, 0) / total_steps,
         "dominant_aim_bin": dominant_aim_bin,
         "dominant_aim_bin_rate": dominant_aim_count / total_steps,
         "aim_error_distribution": dict(sorted(aim_errors.items())),
+        "aim_error": sum(error * count for error, count in aim_errors.items()) / max(sum(aim_errors.values()), 1),
         "exact_aim_match_rate": exact_steps / total_steps,
         "within_1_bin_aim_rate": within_1_steps / total_steps,
         "bad_aim_rate": bad_steps / total_steps,
+        "aim_aligned_rate": aim_aligned_count / total_steps,
+        "target_in_range_rate": target_in_range_count / total_steps,
+        "cooldown_ready_rate": cooldown_ready_count / total_steps,
+        "fire_valid_rate": fire_valid_count / total_steps,
         "shot_exact_aim_rate": shot_exact / max(shot_fired_count, 1),
         "shot_within_1_bin_rate": shot_within_1 / max(shot_fired_count, 1),
         "shot_bad_aim_rate": shot_bad / max(shot_fired_count, 1),
@@ -286,6 +330,11 @@ def analyze_episode(episode: dict[str, Any], config: dict[str, Any] | None = Non
         "hit_good_range_rate": hit_good_range_count / max(self_bullet_hit_count, 1),
         "miss_too_far_rate": miss_too_far_count / max(self_bullet_missed_count, 1),
         "damage_taken_too_close_rate": damage_taken_too_close_count / max(total_steps, 1),
+        "valid_fire_requested_count": valid_fire_requested_count,
+        "invalid_fire_requested_count": invalid_fire_requested_count,
+        "blocked_invalid_fire_count": blocked_invalid_fire_count,
+        "no_fire_when_valid_count": no_fire_when_valid_count,
+        "bullet_hit_per_valid_shot": self_bullet_hit_count / max(shot_fired_when_valid_count, 1),
     }
     warnings = detect_warnings(metrics, component_stats, total_steps, max_aim_count)
     metrics["reward_hacking_warning_count"] = len(warnings)
@@ -322,6 +371,10 @@ def detect_warnings(
         warnings.append("bad_selection_candidate")
     if metrics["fire_requested_count"] > 0 and metrics["shot_fired_count"] == 0:
         warnings.append("fire_requested_but_no_actual_shots")
+    if metrics.get("fire_valid_rate", 0.0) > 0.25 and metrics.get("no_fire_when_valid_count", 0.0) > 0:
+        warnings.append("no_fire_when_valid")
+    if metrics.get("invalid_fire_requested_count", 0.0) > metrics.get("valid_fire_requested_count", 0.0):
+        warnings.append("invalid_fire_spam")
     if metrics["fire_requested_count"] == 0:
         warnings.append("policy_never_requested_fire")
     if (
@@ -381,9 +434,11 @@ def aggregate_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "fire_request_rate",
         "shot_fired_count",
         "shot_fired_rate",
+        "shot_fired_when_valid_count",
         "fire_blocked_count",
         "fire_blocked_cooldown_count",
         "fire_blocked_other_count",
+        "cooldown_blocked_fire_count",
         "shot_fired_per_fire_request",
         "self_bullet_spawn_count",
         "self_bullet_hit_count",
@@ -398,14 +453,20 @@ def aggregate_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "hit_ratio",
         "missed_shot_rate",
         "bullet_hit_per_shot",
+        "bullet_hit_per_valid_shot",
         "aim_bin_0_rate",
         "dominant_aim_bin_rate",
         "exact_aim_match_rate",
         "within_1_bin_aim_rate",
         "bad_aim_rate",
+        "aim_aligned_rate",
+        "target_in_range_rate",
+        "cooldown_ready_rate",
+        "fire_valid_rate",
         "shot_exact_aim_rate",
         "shot_within_1_bin_rate",
         "shot_bad_aim_rate",
+        "aim_error",
         "avg_distance_to_enemy",
         "good_range_rate",
         "too_close_rate",
@@ -413,6 +474,10 @@ def aggregate_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "shot_good_range_rate",
         "hit_good_range_rate",
         "miss_too_far_rate",
+        "valid_fire_requested_count",
+        "invalid_fire_requested_count",
+        "blocked_invalid_fire_count",
+        "no_fire_when_valid_count",
         "reward_hacking_warning_count",
     )
     aggregate = {}

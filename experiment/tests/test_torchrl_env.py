@@ -61,6 +61,36 @@ def test_torchrl_cpc_env_allows_move_and_fire_together():
     assert decoded[4].item() == 1.0
 
 
+def test_torchrl_cpc_env_exposes_stage1b_reward_components():
+    env = TorchRLCPCEnv(
+        seed=3,
+        max_steps=4,
+        enemy_move=False,
+        enemy_fire=False,
+        stationary_target_mode=True,
+        enemy_spawn_direction="right",
+        enemy_spawn_distance_min=120.0,
+        enemy_spawn_distance_max=120.0,
+    )
+    td = env.reset()
+    td["move"] = torch.tensor(0, dtype=torch.int64)
+    td["aim"] = torch.tensor(0, dtype=torch.int64)
+    td["fire"] = torch.tensor(0, dtype=torch.int64)
+
+    stepped = env.step(td)
+    next_td = stepped["next"]
+
+    for key in (
+        "no_fire_ready_penalty",
+        "shot_fired_reward",
+        "bad_aim_shot_penalty",
+        "missed_shot_penalty",
+        "bullet_hit_reward",
+    ):
+        assert ("reward_components", key) in next_td.keys(True)
+    assert float(next_td["reward_components", "no_fire_ready_penalty"].reshape(-1)[0].item()) < 0.0
+
+
 def test_torchrl_cpc_env_check_env_specs_if_available():
     check_env_specs = import_check_env_specs()
     if check_env_specs is None:

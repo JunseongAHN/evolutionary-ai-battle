@@ -25,16 +25,29 @@ class CpcMetrics:
     reward_component_sums: dict[str, float] = field(default_factory=dict)
     aim_alignment_sum: float = 0.0
     aim_bin_counts: list[int] = field(default_factory=lambda: [0] * AIM_BINS)
+    current_aim_bin_counts: list[int] = field(default_factory=lambda: [0] * AIM_BINS)
     ideal_aim_bin_counts: list[int] = field(default_factory=lambda: [0] * AIM_BINS)
+    aim_error_sum: float = 0.0
+    aim_error_count: int = 0
+    aim_aligned_count: int = 0
+    target_in_range_count: int = 0
+    cooldown_ready_count: int = 0
+    fire_valid_count: int = 0
     exact_aim_match_count: int = 0
     within_1_bin_aim_count: int = 0
     bad_aim_count: int = 0
     shot_fired_count: int = 0
+    shot_fired_when_valid_count: int = 0
     shot_exact_aim_count: int = 0
     shot_near_aim_count: int = 0
     shot_off_target_count: int = 0
     off_target_shot_count: int = 0
     fire_requested_count: int = 0
+    valid_fire_requested_count: int = 0
+    invalid_fire_requested_count: int = 0
+    blocked_invalid_fire_count: int = 0
+    no_fire_when_valid_count: int = 0
+    cooldown_blocked_fire_count: int = 0
     bullet_hit_count: int = 0
     missed_shot_count: int = 0
     enemy_dead: bool = False
@@ -61,10 +74,21 @@ class CpcMetrics:
         reward: float = 0.0,
         reward_components: dict[str, float] | None = None,
         fire_requested: bool = False,
+        current_aim_bin: int = 0,
         aim_alignment: float = 0.0,
         aim_bin: int = 0,
         ideal_aim_bin: int = 0,
         aim_bin_error: int = 0,
+        aim_error: int = 0,
+        aim_aligned: bool = False,
+        target_in_range: bool = False,
+        cooldown_ready: bool = False,
+        fire_valid: bool = False,
+        valid_fire_requested: bool = False,
+        invalid_fire_requested: bool = False,
+        blocked_invalid_fire: bool = False,
+        no_fire_when_valid: bool = False,
+        shot_fired_when_valid: bool = False,
         shot_fired: bool = False,
         off_target_shot: bool = False,
         bullet_hit: bool = False,
@@ -94,13 +118,26 @@ class CpcMetrics:
             self.reward_component_sums[key] = self.reward_component_sums.get(key, 0.0) + float(value)
         self.aim_alignment_sum += float(aim_alignment)
         self.aim_bin_counts[int(aim_bin) % AIM_BINS] += 1
+        self.current_aim_bin_counts[int(current_aim_bin) % AIM_BINS] += 1
         self.ideal_aim_bin_counts[int(ideal_aim_bin) % AIM_BINS] += 1
+        self.aim_error_sum += float(aim_error)
+        self.aim_error_count += 1
+        self.aim_aligned_count += int(bool(aim_aligned))
+        self.target_in_range_count += int(bool(target_in_range))
+        self.cooldown_ready_count += int(bool(cooldown_ready))
+        self.fire_valid_count += int(bool(fire_valid))
         self.exact_aim_match_count += int(int(aim_bin_error) == 0)
         self.within_1_bin_aim_count += int(int(aim_bin_error) <= 1)
         self.bad_aim_count += int(int(aim_bin_error) >= 3)
         self.fire_requested_count += int(bool(fire_requested))
+        self.valid_fire_requested_count += int(bool(valid_fire_requested))
+        self.invalid_fire_requested_count += int(bool(invalid_fire_requested))
+        self.blocked_invalid_fire_count += int(bool(blocked_invalid_fire))
+        self.no_fire_when_valid_count += int(bool(no_fire_when_valid))
+        self.cooldown_blocked_fire_count += int(bool(fire_requested and not cooldown_ready))
         if shot_fired:
             self.shot_fired_count += 1
+            self.shot_fired_when_valid_count += int(bool(shot_fired_when_valid))
             self.shot_exact_aim_count += int(int(aim_bin_error) == 0)
             self.shot_near_aim_count += int(int(aim_bin_error) == 1)
             self.shot_off_target_count += int(int(aim_bin_error) >= 2)
@@ -121,6 +158,7 @@ class CpcMetrics:
         damage_dealt_ratio = self.damage_dealt / max(1.0, self.enemy_max_hp)
         damage_taken_ratio = self.damage_taken / max(1.0, self.self_max_hp)
         summary = {f"reward_{key}": value for key, value in sorted(self.reward_component_sums.items())}
+        valid_shot_steps = max(1, self.shot_fired_when_valid_count)
         summary.update({
             "avg_ally_distance": sum(self.ally_distances) / steps,
             "isolation_rate": self.isolation_steps / steps,
@@ -141,22 +179,39 @@ class CpcMetrics:
             "mean_aim_alignment": self.aim_alignment_sum / steps,
             "aim_bin_0_rate": self.aim_bin_counts[0] / steps,
             "aim_bin_entropy": _entropy(self.aim_bin_counts),
+            "current_aim_bin_distribution": {
+                str(index): float(count) for index, count in enumerate(self.current_aim_bin_counts) if count
+            },
             "ideal_aim_bin_distribution": {
                 str(index): float(count) for index, count in enumerate(self.ideal_aim_bin_counts) if count
             },
+            "current_aim_bin": _dominant_bin(self.current_aim_bin_counts),
+            "current_aim_bin_rate": _dominant_rate(self.current_aim_bin_counts, steps),
             "exact_aim_match_rate": self.exact_aim_match_count / steps,
             "within_1_bin_aim_rate": self.within_1_bin_aim_count / steps,
             "bad_aim_rate": self.bad_aim_count / steps,
+            "aim_error": self.aim_error_sum / max(1, self.aim_error_count),
+            "aim_aligned_rate": self.aim_aligned_count / steps,
+            "target_in_range_rate": self.target_in_range_count / steps,
+            "cooldown_ready_rate": self.cooldown_ready_count / steps,
+            "fire_valid_rate": self.fire_valid_count / steps,
             "shot_exact_aim_rate": self.shot_exact_aim_count / shot_steps,
             "shot_near_aim_rate": self.shot_near_aim_count / shot_steps,
             "shot_off_target_rate": self.shot_off_target_count / shot_steps,
             "shot_bad_aim_rate": self.shot_off_target_count / shot_steps,
             "bullet_hit_per_shot": self.bullet_hit_count / shot_steps,
+            "bullet_hit_per_valid_shot": self.bullet_hit_count / valid_shot_steps,
             "fire_requested_count": float(self.fire_requested_count),
             "shot_fired_count": float(self.shot_fired_count),
+            "shot_fired_when_valid_count": float(self.shot_fired_when_valid_count),
             "off_target_shot_count": float(self.off_target_shot_count),
             "bullet_hit_count": float(self.bullet_hit_count),
             "missed_shot_count": float(self.missed_shot_count),
+            "valid_fire_requested_count": float(self.valid_fire_requested_count),
+            "invalid_fire_requested_count": float(self.invalid_fire_requested_count),
+            "blocked_invalid_fire_count": float(self.blocked_invalid_fire_count),
+            "no_fire_when_valid_count": float(self.no_fire_when_valid_count),
+            "cooldown_blocked_fire_count": float(self.cooldown_blocked_fire_count),
             "hit_ratio": self.bullet_hit_count / shot_steps,
             "missed_shot_rate": self.missed_shot_count / shot_steps,
             "avg_distance_to_enemy": self.enemy_distance_sum / steps,
@@ -183,3 +238,15 @@ def _entropy(counts: list[int]) -> float:
         probability = count / total
         entropy -= probability * math.log2(probability)
     return entropy
+
+
+def _dominant_bin(counts: list[int]) -> int:
+    if not counts:
+        return 0
+    return max(range(len(counts)), key=lambda index: counts[index])
+
+
+def _dominant_rate(counts: list[int], steps: int) -> float:
+    if steps <= 0:
+        return 0.0
+    return max(counts, default=0) / steps
