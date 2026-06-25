@@ -549,6 +549,10 @@ def evaluate_policy_local_combat_analysis(
     was_training = policy.training
     policy.eval()
     result_episodes = []
+    fire_logits_sum = torch.zeros(2, dtype=torch.float32)
+    fire_probs_sum = torch.zeros(2, dtype=torch.float32)
+    deterministic_fire_count = 0
+    total_steps = 0
     for episode in range(max(1, int(episodes))):
         env = TorchRLCPCEnv(
             seed=int(cfg.seed) + seed_offset + episode,
@@ -587,6 +591,11 @@ def evaluate_policy_local_combat_analysis(
                 info={},
             )
             move_logits, aim_logits, fire_logits, _ = policy(obs_td)
+            fire_logits_cpu = fire_logits.detach().to("cpu").reshape(-1, fire_logits.shape[-1]).mean(dim=0)
+            fire_probs_cpu = torch.softmax(fire_logits.detach(), dim=-1).to("cpu").reshape(-1, fire_logits.shape[-1]).mean(dim=0)
+            fire_logits_sum += fire_logits_cpu
+            fire_probs_sum += fire_probs_cpu
+            deterministic_fire_count += int(fire_logits_cpu.argmax(dim=-1).item())
             action = {
                 "move": int(move_logits.argmax(dim=-1).reshape(-1)[0].item()),
                 "aim": int(aim_logits.argmax(dim=-1).reshape(-1)[0].item()),
@@ -596,6 +605,7 @@ def evaluate_policy_local_combat_analysis(
             obs, reward, done, info = cpc_env.step(action)
             total_reward += float(reward)
             steps.append(_compact_eval_step(step_index, action, decoded, reward, info, cpc_env))
+            total_steps += 1
         result_episodes.append(
             {
                 "episode_index": episode,
@@ -608,22 +618,33 @@ def evaluate_policy_local_combat_analysis(
         )
     if was_training:
         policy.train()
-    return analyze_result(
+    analysis = analyze_result(
         {
             "schema_version": "cpc-common-v0",
             "source": "train_ppo_eval_analysis",
-        "config": {
-            "episodes": max(1, int(episodes)),
-            "max_steps": int(cfg.max_episode_steps),
-            "stage": cfg.stage,
-            "enemy_move": bool(cfg.enemy_move),
-            "enemy_fire": bool(cfg.enemy_fire),
-            "stationary_target_mode": bool(cfg.stationary_target_mode),
-            "bullet_range": float(cfg.bullet_range),
-        },
-        "episodes": result_episodes,
-    }
+            "config": {
+                "episodes": max(1, int(episodes)),
+                "max_steps": int(cfg.max_episode_steps),
+                "stage": cfg.stage,
+                "enemy_move": bool(cfg.enemy_move),
+                "enemy_fire": bool(cfg.enemy_fire),
+                "stationary_target_mode": bool(cfg.stationary_target_mode),
+                "bullet_range": float(cfg.bullet_range),
+            },
+            "episodes": result_episodes,
+        }
     )
+    mean_fire_logits = fire_logits_sum / float(max(total_steps, 1))
+    mean_fire_probs = fire_probs_sum / float(max(total_steps, 1))
+    analysis["fire_diagnostics"] = {
+        "mean_logits": [float(value) for value in mean_fire_logits.tolist()],
+        "mean_probs": [float(value) for value in mean_fire_probs.tolist()],
+        "sampled_fire_rate": None,
+        "deterministic_fire_rate": deterministic_fire_count / max(total_steps, 1),
+        "deterministic_fire_action": int(mean_fire_logits.argmax(dim=-1).item()) if mean_fire_logits.numel() else 0,
+        "stochastic_eval": False,
+    }
+    return analysis
 
 
 def resolve_device(device: str) -> torch.device:
@@ -672,7 +693,10 @@ def stage1_combat_quality_score(analysis: dict[str, Any]) -> float:
 def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
     aggregate = analysis.get("aggregate", {})
     config = analysis.get("config", {})
+    fire = analysis.get("fire_diagnostics", {})
     warning_count = sum(int(value) for value in aggregate.get("warnings", {}).values())
+    mean_logits = fire.get("mean_logits", [0.0, 0.0])
+    mean_probs = fire.get("mean_probs", [0.0, 0.0])
     return {
         "eval_analysis_total_reward": float(aggregate.get("total_reward", 0.0)),
         "eval_analysis_damage_taken": float(aggregate.get("damage_taken", 0.0)),
@@ -684,6 +708,12 @@ def _eval_analysis_row(analysis: dict[str, Any]) -> dict[str, float]:
         "eval_analysis_max_distance_to_enemy": float(aggregate.get("max_distance_to_enemy", 0.0)),
         "eval_analysis_distance_over_bullet_range_rate": float(aggregate.get("distance_over_bullet_range_rate", 0.0)),
         "eval_analysis_within_bullet_range_rate": float(aggregate.get("within_bullet_range_rate", 0.0)),
+        "eval_analysis_fire_head_logit_0": float(mean_logits[0] if len(mean_logits) > 0 else 0.0),
+        "eval_analysis_fire_head_logit_1": float(mean_logits[1] if len(mean_logits) > 1 else 0.0),
+        "eval_analysis_fire_head_prob_0": float(mean_probs[0] if len(mean_probs) > 0 else 0.0),
+        "eval_analysis_fire_head_prob_1": float(mean_probs[1] if len(mean_probs) > 1 else 0.0),
+        "eval_analysis_fire_deterministic_action": float(fire.get("deterministic_fire_action", 0.0)),
+        "eval_analysis_fire_deterministic_rate": float(fire.get("deterministic_fire_rate", 0.0)),
         "eval_analysis_enemy_move": float(bool(config.get("enemy_move", True))),
         "eval_analysis_enemy_fire": float(bool(config.get("enemy_fire", True))),
         "eval_analysis_stationary_target_mode": float(bool(config.get("stationary_target_mode", False))),
@@ -794,6 +824,12 @@ def _write_metrics(path: Path, rows: list[dict[str, Any]]) -> None:
         "eval_analysis_max_distance_to_enemy",
         "eval_analysis_distance_over_bullet_range_rate",
         "eval_analysis_within_bullet_range_rate",
+        "eval_analysis_fire_head_logit_0",
+        "eval_analysis_fire_head_logit_1",
+        "eval_analysis_fire_head_prob_0",
+        "eval_analysis_fire_head_prob_1",
+        "eval_analysis_fire_deterministic_action",
+        "eval_analysis_fire_deterministic_rate",
         "eval_analysis_enemy_move",
         "eval_analysis_enemy_fire",
         "eval_analysis_stationary_target_mode",

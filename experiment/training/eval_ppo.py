@@ -46,6 +46,12 @@ def eval_checkpoint(
     returns = []
     lengths = []
     metrics = []
+    fire_logits_sum = torch.zeros(2, dtype=torch.float32)
+    fire_probs_sum = torch.zeros(2, dtype=torch.float32)
+    sampled_fire_count = 0
+    deterministic_fire_count = 0
+    total_steps = 0
+    stochastic_eval = bool(sampled or not deterministic)
     for episode in range(episodes):
         env = TorchRLCPCEnv(
             seed=int(cfg.get("seed", 0)) + episode,
@@ -72,16 +78,24 @@ def eval_checkpoint(
         episode_length = 0
         last_metrics = {}
         while not done:
-            if sampled or not deterministic:
+            move_logits, aim_logits, fire_logits, _ = policy(obs)
+            fire_logits_cpu = fire_logits.detach().to("cpu").reshape(-1, fire_logits.shape[-1]).mean(dim=0)
+            fire_probs_cpu = torch.softmax(fire_logits.detach(), dim=-1).to("cpu").reshape(-1, fire_logits.shape[-1]).mean(dim=0)
+            fire_logits_sum += fire_logits_cpu
+            fire_probs_sum += fire_probs_cpu
+            deterministic_fire_action = int(fire_logits_cpu.argmax(dim=-1).item())
+            deterministic_fire_count += deterministic_fire_action
+            if stochastic_eval:
                 output = policy.sample_action(obs)
                 action = output.action
+                sampled_fire_count += int(action["fire"].detach().to("cpu").reshape(-1)[0].item())
             else:
-                move_logits, aim_logits, fire_logits, _ = policy(obs)
                 action = {
                     "move": move_logits.argmax(dim=-1).squeeze(),
                     "aim": aim_logits.argmax(dim=-1).squeeze(),
                     "fire": fire_logits.argmax(dim=-1).squeeze(),
                 }
+                sampled_fire_count += int(action["fire"].detach().to("cpu").reshape(-1)[0].item())
             step_td = obs.clone()
             step_td["move"] = action["move"]
             step_td["aim"] = action["aim"]
@@ -91,15 +105,27 @@ def eval_checkpoint(
             episode_return += float(obs["reward"].reshape(-1)[0].item())
             episode_length += 1
             last_metrics = _metrics_from_td(obs)
+            total_steps += 1
         returns.append(episode_return)
         lengths.append(episode_length)
         metrics.append(last_metrics)
 
+    mean_fire_logits = _tensor_list_mean(fire_logits_sum, max(total_steps, 1))
+    mean_fire_probs = _tensor_list_mean(fire_probs_sum, max(total_steps, 1))
+    deterministic_fire_action = int(mean_fire_logits.argmax(dim=-1).item()) if mean_fire_logits.numel() else 0
     report = {
         "mean_episode_return": _mean(returns),
         "mean_episode_length": _mean(lengths),
         "mean_metrics": _mean_metrics(metrics),
         "bullet_range": float(cfg.get("bullet_range", 0.0) or 0.0),
+        "fire_diagnostics": {
+            "mean_logits": [float(value) for value in mean_fire_logits.tolist()],
+            "mean_probs": [float(value) for value in mean_fire_probs.tolist()],
+            "sampled_fire_rate": (sampled_fire_count / max(total_steps, 1)) if stochastic_eval else None,
+            "deterministic_fire_rate": deterministic_fire_count / max(total_steps, 1),
+            "deterministic_fire_action": deterministic_fire_action,
+            "stochastic_eval": stochastic_eval,
+        },
         "episodes": episodes,
         "checkpoint": str(checkpoint),
         "selection_metric": checkpoint_data.get("selection_metric"),
@@ -146,6 +172,10 @@ def _mean_metrics(metrics: list[dict[str, float]]) -> dict[str, float]:
         "too_far_rate",
     )
     return {key: _mean([item.get(key, 0.0) for item in metrics]) for key in keys}
+
+
+def _tensor_list_mean(value: torch.Tensor, divisor: int) -> torch.Tensor:
+    return value / float(max(divisor, 1))
 
 
 def debug_print_reset_samples_from_checkpoint(

@@ -159,6 +159,68 @@ def check_forced_move_fire_action(seed: int) -> tuple[str, dict[str, Any]]:
     }
 
 
+def check_forced_fire_probe(checkpoint: str | Path, seed: int) -> tuple[str, dict[str, Any]]:
+    checkpoint_data = torch.load(checkpoint, map_location="cpu")
+    cfg = checkpoint_data.get("config", {})
+    model = MultiDiscreteActorCritic(hidden_dim=int(checkpoint_data.get("hidden_dim", cfg.get("hidden_dim", 64))))
+    model.load_state_dict(checkpoint_data["policy_state_dict"])
+    model.eval()
+    env = TorchRLCPCEnv(
+        seed=int(cfg.get("seed", seed)),
+        max_steps=int(cfg.get("max_episode_steps", 50)),
+        device="cpu",
+        randomize_enemy_spawn_direction=bool(cfg.get("randomize_enemy_spawn_direction", False)),
+        enemy_spawn_directions=cfg.get("enemy_spawn_directions"),
+        enemy_spawn_direction=cfg.get("enemy_spawn_direction"),
+        enemy_spawn_distance_min=cfg.get("enemy_spawn_distance_min"),
+        enemy_spawn_distance_max=cfg.get("enemy_spawn_distance_max"),
+        stage=str(cfg.get("stage", "local_combat")),
+        shrink_safe_zone=bool(cfg.get("shrink_safe_zone", False)),
+        use_zone_reward=bool(cfg.get("use_zone_reward", False)),
+        enemy_move=bool(cfg.get("enemy_move", True)),
+        enemy_fire=bool(cfg.get("enemy_fire", True)),
+        stationary_target_mode=bool(cfg.get("stationary_target_mode", False)),
+        fire_interval_steps=cfg.get("fire_interval_steps"),
+        bullet_speed=cfg.get("bullet_speed"),
+        bullet_range=cfg.get("bullet_range"),
+        bullet_damage=cfg.get("bullet_damage"),
+        bullet_hit_radius=cfg.get("bullet_hit_radius"),
+    )
+    obs = env.reset()
+    with torch.no_grad():
+        move_logits, aim_logits, fire_logits, _ = model(obs)
+        fire_probs = torch.softmax(fire_logits, dim=-1)
+        action = {
+            "move": int(move_logits.argmax(dim=-1).reshape(-1)[0].item()),
+            "aim": int(aim_logits.argmax(dim=-1).reshape(-1)[0].item()),
+            "fire": 1,
+        }
+        decoded = decode_action(action)
+    step_td = obs.clone()
+    step_td["move"] = torch.tensor(action["move"], dtype=torch.int64)
+    step_td["aim"] = torch.tensor(action["aim"], dtype=torch.int64)
+    step_td["fire"] = torch.tensor(action["fire"], dtype=torch.int64)
+    next_td = env.step(step_td)["next"]
+    fire_requested_count = float(next_td["metrics", "fire_requested_count"].reshape(-1)[0].item())
+    shot_fired_count = float(next_td["metrics", "shot_fired_count"].reshape(-1)[0].item())
+    if fire_requested_count <= 0.0 or shot_fired_count <= 0.0:
+        return "FAIL", {
+            "reason": "forced fire did not produce a shot",
+            "fire_requested_count": fire_requested_count,
+            "shot_fired_count": shot_fired_count,
+            "fire_logits": [float(value) for value in fire_logits.reshape(-1).detach().to("cpu").tolist()],
+            "fire_probs": [float(value) for value in fire_probs.reshape(-1).detach().to("cpu").tolist()],
+            "decoded_action": normalize_decoded_action(decoded),
+        }
+    return "PASS", {
+        "fire_requested_count": fire_requested_count,
+        "shot_fired_count": shot_fired_count,
+        "fire_logits": [float(value) for value in fire_logits.reshape(-1).detach().to("cpu").tolist()],
+        "fire_probs": [float(value) for value in fire_probs.reshape(-1).detach().to("cpu").tolist()],
+        "decoded_action": normalize_decoded_action(decoded),
+    }
+
+
 def check_decode_bounds() -> tuple[str, dict[str, Any]]:
     samples = [
         {"move": move, "aim": aim, "fire": fire}
@@ -278,6 +340,10 @@ def run_acceptance(
         "selected_reward_checkpoint": result.get("selected_reward_checkpoint", ""),
         "metrics_csv": result["metrics_csv"],
     }
+
+    status, detail = check_forced_fire_probe(result["checkpoint"], seed)
+    checks["forced_fire_probe"] = status
+    details["forced_fire_probe"] = detail
 
     status, detail = validate_checkpoint_load(result["checkpoint"], eval_episodes=eval_episodes)
     checks["checkpoint_load_eval"] = status

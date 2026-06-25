@@ -115,3 +115,28 @@ def test_smoke_training_writes_checkpoint_and_metrics(tmp_path):
 
     assert pathlib.Path(result["checkpoint"]).exists()
     assert pathlib.Path(result["metrics_csv"]).exists()
+
+
+def test_eval_checkpoint_exposes_fire_diagnostics(tmp_path):
+    cfg = PPOConfig(
+        total_steps=16,
+        rollout_steps=8,
+        num_epochs=1,
+        minibatch_size=4,
+        max_episode_steps=8,
+        hidden_dim=16,
+        run_dir=str(tmp_path),
+    )
+
+    result = train_ppo(cfg)
+    deterministic_report = eval_checkpoint(result["checkpoint"], episodes=2, deterministic=True)
+    sampled_report = eval_checkpoint(result["checkpoint"], episodes=2, sampled=True)
+
+    assert "fire_diagnostics" in deterministic_report
+    assert deterministic_report["fire_diagnostics"]["sampled_fire_rate"] is None
+    assert len(deterministic_report["fire_diagnostics"]["mean_logits"]) == 2
+    assert len(deterministic_report["fire_diagnostics"]["mean_probs"]) == 2
+    assert deterministic_report["fire_diagnostics"]["deterministic_fire_action"] in (0, 1)
+
+    assert sampled_report["fire_diagnostics"]["sampled_fire_rate"] is not None
+    assert 0.0 <= sampled_report["fire_diagnostics"]["sampled_fire_rate"] <= 1.0

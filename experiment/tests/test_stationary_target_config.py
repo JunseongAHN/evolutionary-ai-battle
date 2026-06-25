@@ -17,6 +17,7 @@ pytest.importorskip("tensordict")
 
 from training.torchrl_env import TorchRLCPCEnv
 from training.train_ppo import PPOConfig, load_config, train_ppo
+from check_pr3_acceptance import check_forced_fire_probe
 
 
 def test_stationary_target_config_sets_enemy_flags():
@@ -209,3 +210,33 @@ def test_stationary_target_training_writes_stationary_fields(tmp_path):
     report = eval_checkpoint(result["checkpoint"], episodes=2)
     assert report["bullet_range"] == pytest.approx(280.0)
     assert report["mean_metrics"]["avg_distance_to_enemy"] <= report["bullet_range"]
+    assert "fire_diagnostics" in report
+    assert report["fire_diagnostics"]["deterministic_fire_action"] in (0, 1)
+    assert len(report["fire_diagnostics"]["mean_logits"]) == 2
+    assert len(report["fire_diagnostics"]["mean_probs"]) == 2
+    assert report["fire_diagnostics"]["sampled_fire_rate"] is None
+
+
+def test_forced_fire_probe_spawns_a_shot(tmp_path):
+    cfg = PPOConfig(
+        seed=13,
+        device="cpu",
+        total_steps=8,
+        rollout_steps=4,
+        num_epochs=1,
+        minibatch_size=2,
+        max_episode_steps=4,
+        hidden_dim=16,
+        run_dir=str(tmp_path),
+        randomize_enemy_spawn_direction=True,
+        enemy_move=False,
+        enemy_fire=False,
+        stationary_target_mode=True,
+    )
+
+    result = train_ppo(cfg)
+    status, detail = check_forced_fire_probe(result["checkpoint"], seed=cfg.seed)
+
+    assert status == "PASS"
+    assert detail["fire_requested_count"] > 0.0
+    assert detail["shot_fired_count"] > 0.0
