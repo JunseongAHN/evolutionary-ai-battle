@@ -1,5 +1,6 @@
-"""Training scaffold package for CPC toy TorchRL/PPO experiments.
+"""Compatibility package for older CPC training import paths.
 
-Keep package import lightweight. Import TorchRL/PyTorch modules from their
-specific files so `training.cpc_actions` remains usable without TorchRL.
+The active env/action modules now live in :mod:`experiment.core`. This package
+keeps `training.cpc_env`, `training.cpc_actions`, and `training.cpc_metrics`
+available for older notebooks or legacy scripts without importing TorchRL.
 """

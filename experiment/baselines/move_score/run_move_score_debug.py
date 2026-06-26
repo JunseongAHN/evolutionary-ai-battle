@@ -10,9 +10,9 @@ if str(EXPERIMENT_ROOT) not in sys.path:
     sys.path.insert(0, str(EXPERIMENT_ROOT))
 
 from baselines.move_score import TacticalMoveScoreBot, TacticalMoveScorer
+from core.cpc_env import CPCEnv
 from core.env_config import load_env_config
 from core.local_occupancy_grid import build_local_occupancy_grid, render_grid_to_png
-from training.cpc_env import CPCEnv
 
 
 def main() -> None:

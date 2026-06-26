@@ -14,10 +14,10 @@ if str(REPO_ROOT) not in sys.path:
 from baselines.aim_oracle.aim_bin_utils import grid_cell_to_local_vector, vector_to_aim_bin
 from baselines.aim_oracle.enemy_cell_utils import find_nearest_enemy_cell
 from baselines.aim_oracle.tactical_aim_oracle_bot import TacticalAimOracleBot
+from core.cpc_actions import AIM_BINS
+from core.cpc_env import CPCEnv
 from core.env_config import load_env_config
 from core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid
-from training.cpc_actions import AIM_BINS
-from training.cpc_env import CPCEnv
 
 
 ENEMY_CHANNEL = 1

@@ -13,9 +13,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from baselines.tactical_baseline import FireRule, build_tactical_baseline_bot
 from baselines.tactical_baseline.run_tactical_autoplay import run_tactical_autoplay
+from core.cpc_actions import decode_action
+from core.cpc_env import CPCEnv
 from core.local_occupancy_grid import build_local_occupancy_grid
-from training.cpc_actions import decode_action
-from training.cpc_env import CPCEnv
 from core.env_config import load_env_config
 
 

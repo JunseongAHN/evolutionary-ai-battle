@@ -19,7 +19,7 @@ from core.local_occupancy_grid import (
     build_local_occupancy_grid,
     render_grid_to_png,
 )
-from training.cpc_env import CPCEnv
+from core.cpc_env import CPCEnv
 from scripts.manual_env_debug import export_debug_snapshot
 
 

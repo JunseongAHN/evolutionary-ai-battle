@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.env_config import load_env_config
-from training.cpc_env import CPCEnv
+from core.cpc_env import CPCEnv
 
 
 def test_load_env_config_manual_enemy_right():

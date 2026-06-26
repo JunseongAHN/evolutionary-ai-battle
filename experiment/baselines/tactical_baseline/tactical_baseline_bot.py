@@ -6,13 +6,13 @@ from typing import Any
 try:
     from experiment.baselines.aim_oracle import TacticalAimOracleBot
     from experiment.baselines.move_score import TacticalMoveScorer
+    from experiment.core.cpc_actions import AIM_BINS, MOVE_BINS, decode_action
     from experiment.core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid
-    from experiment.training.cpc_actions import AIM_BINS, MOVE_BINS, decode_action
 except ModuleNotFoundError:
     from baselines.aim_oracle import TacticalAimOracleBot
     from baselines.move_score import TacticalMoveScorer
+    from core.cpc_actions import AIM_BINS, MOVE_BINS, decode_action
     from core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid
-    from training.cpc_actions import AIM_BINS, MOVE_BINS, decode_action
 
 from .fire_rule import FireRule
 

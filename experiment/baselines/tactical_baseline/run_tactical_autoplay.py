@@ -13,15 +13,15 @@ for path in (REPO_ROOT, EXPERIMENT_ROOT):
         sys.path.insert(0, str(path))
 
 try:
+    from experiment.core.cpc_actions import decode_action
+    from experiment.core.cpc_env import CPCEnv
     from experiment.core.env_config import load_env_config
     from experiment.core.local_occupancy_grid import build_local_occupancy_grid, render_grid_to_png
-    from experiment.training.cpc_actions import decode_action
-    from experiment.training.cpc_env import CPCEnv
 except ModuleNotFoundError:
+    from core.cpc_actions import decode_action
+    from core.cpc_env import CPCEnv
     from core.env_config import load_env_config
     from core.local_occupancy_grid import build_local_occupancy_grid, render_grid_to_png
-    from training.cpc_actions import decode_action
-    from training.cpc_env import CPCEnv
 
 try:
     from experiment.baselines.tactical_baseline import build_tactical_baseline_bot

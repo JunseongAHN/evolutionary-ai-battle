@@ -4,16 +4,16 @@ import math
 from typing import Iterator
 
 try:
-    from experiment.training.cpc_actions import MOVE_BINS, decode_action
+    from experiment.core.cpc_actions import MOVE_BINS, decode_action
 except ModuleNotFoundError:
-    from training.cpc_actions import MOVE_BINS, decode_action
+    from core.cpc_actions import MOVE_BINS, decode_action
 
 
 def get_move_bin_vectors() -> dict[int, tuple[float, float]]:
     """
     Return normalized env movement vectors by move_bin.
 
-    This matches training.cpc_actions.decode_action:
+    This matches core.cpc_actions.decode_action:
     0 is STAY, +x moves right, and +y moves down in the env/world
     coordinate frame. Diagonal bins are normalized by the env action decoder.
     """

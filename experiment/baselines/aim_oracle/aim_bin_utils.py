@@ -3,10 +3,10 @@ from __future__ import annotations
 import math
 
 try:
-    from experiment.training.cpc_actions import vec_to_aim_bin as _core_vec_to_aim_bin
+    from experiment.core.cpc_actions import vec_to_aim_bin as _core_vec_to_aim_bin
 except ModuleNotFoundError:
     try:
-        from training.cpc_actions import vec_to_aim_bin as _core_vec_to_aim_bin
+        from core.cpc_actions import vec_to_aim_bin as _core_vec_to_aim_bin
     except ModuleNotFoundError:
         _core_vec_to_aim_bin = None
 

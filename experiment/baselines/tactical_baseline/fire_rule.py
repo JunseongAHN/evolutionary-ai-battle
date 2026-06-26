@@ -5,9 +5,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 try:
-    from experiment.training.cpc_actions import AIM_BINS, circular_bin_distance, vec_to_aim_bin
+    from experiment.core.cpc_actions import AIM_BINS, circular_bin_distance, vec_to_aim_bin
 except ModuleNotFoundError:
-    from training.cpc_actions import AIM_BINS, circular_bin_distance, vec_to_aim_bin
+    from core.cpc_actions import AIM_BINS, circular_bin_distance, vec_to_aim_bin
 
 
 class FireRule:

@@ -8,15 +8,16 @@ from typing import Any
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENT_ROOT = REPO_ROOT / "experiment"
-if str(EXPERIMENT_ROOT) not in sys.path:
-    sys.path.insert(0, str(EXPERIMENT_ROOT))
+for path in (REPO_ROOT, EXPERIMENT_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from core.env_config import EnvConfig, load_env_config
+from core.cpc_actions import decode_action, vec_to_aim_bin
+from core.cpc_env import CPCEnv
 from core.local_occupancy_grid import build_local_occupancy_grid, render_grid_to_png
 from gui.geometry import screen_to_world
 from gui.pygame_viewer import PygameCPCViewer
-from training.cpc_actions import decode_action, vec_to_aim_bin
-from training.cpc_env import CPCEnv
 
 
 ACTION_MAP: dict[str, dict[str, int]] = {
@@ -67,16 +68,25 @@ def main() -> None:
     parser.add_argument("--snapshot-output-dir", default="experiment/runs/manual_grid_debug")
     parser.add_argument("--grid-output-dir", help="Deprecated alias for --snapshot-output-dir.")
     parser.add_argument("--no-grid-png", action="store_true", help="Disable GUI snapshot saving.")
+    parser.add_argument(
+        "--save-snapshot",
+        action="store_true",
+        help="In --no-gui mode, save reset and step occupancy-grid PNG/status snapshots.",
+    )
     args = parser.parse_args()
 
     config = load_env_config(args.config)
     snapshot_output_dir = None if args.no_grid_png else pathlib.Path(args.grid_output_dir or args.snapshot_output_dir)
     if args.no_gui:
+        if args.save_snapshot and snapshot_output_dir is None:
+            raise SystemExit("--save-snapshot requires grid PNG saving; remove --no-grid-png")
         run_scripted_debug(
             config,
             args.config,
             steps=args.steps,
             actions=args.actions,
+            snapshot_output_dir=snapshot_output_dir,
+            save_snapshot=args.save_snapshot,
         )
         return
     if args.actions:
@@ -97,16 +107,24 @@ def run_scripted_debug(
     *,
     steps: int,
     actions: str | None,
+    snapshot_output_dir: pathlib.Path | None = None,
+    save_snapshot: bool = False,
 ) -> None:
     env = CPCEnv.from_config(config)
     env.reset(seed=config.seed)
     print(f"Reset config={config_path} seed={config.seed}")
     print_state("reset", env)
+    if save_snapshot and snapshot_output_dir is not None:
+        saved = export_debug_snapshot(env, config_path, snapshot_output_dir, "step_000_reset")
+        print(f"Saved snapshot png={saved['grid_png']} status={saved['status_json']}")
 
     for step_index, action_name in enumerate(parse_action_names(actions, steps), start=1):
         action = ACTION_MAP[action_name]
         _, reward, done, info = env.step(action)
         print_state(f"step={step_index} action={action_name}", env, reward=reward, done=done, info=info)
+        if save_snapshot and snapshot_output_dir is not None:
+            saved = export_debug_snapshot(env, config_path, snapshot_output_dir, f"step_{step_index:03d}_{action_name}")
+            print(f"Saved snapshot png={saved['grid_png']} status={saved['status_json']}")
         if done:
             break
 

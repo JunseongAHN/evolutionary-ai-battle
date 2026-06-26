@@ -13,16 +13,16 @@ for path in (REPO_ROOT, EXPERIMENT_ROOT):
 
 try:
     from experiment.baselines.aim_oracle.tactical_aim_oracle_bot import TacticalAimOracleBot
+    from experiment.core.cpc_actions import AIM_BINS
+    from experiment.core.cpc_env import CPCEnv
     from experiment.core.env_config import load_env_config
     from experiment.core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid, render_grid_to_png
-    from experiment.training.cpc_actions import AIM_BINS
-    from experiment.training.cpc_env import CPCEnv
 except ModuleNotFoundError:
     from baselines.aim_oracle.tactical_aim_oracle_bot import TacticalAimOracleBot
+    from core.cpc_actions import AIM_BINS
+    from core.cpc_env import CPCEnv
     from core.env_config import load_env_config
     from core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid, render_grid_to_png
-    from training.cpc_actions import AIM_BINS
-    from training.cpc_env import CPCEnv
 
 
 def main() -> None:
