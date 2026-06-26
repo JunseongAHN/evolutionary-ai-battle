@@ -46,7 +46,7 @@ class FireRule:
 
         target_in_range, target_range_source = self._target_in_range(observation, snapshot, distance_to_enemy)
         aim_error, aim_bin_error, aim_source = self._aim_error(observation, snapshot, self_pos, enemy_pos)
-        line_of_sight, los_source = self._line_of_sight(snapshot, self_pos, enemy_pos)
+        line_of_sight, los_source = self._line_of_sight(observation, snapshot, self_pos, enemy_pos)
         cooldown_ready, cooldown_source = self._cooldown_ready(observation, snapshot)
         ammo_available, ammo_source = self._ammo_available(observation, snapshot)
 
@@ -175,6 +175,7 @@ class FireRule:
 
     def _line_of_sight(
         self,
+        obs: Mapping[str, Any],
         snapshot: Mapping[str, Any],
         self_pos: Mapping[str, float] | None,
         enemy_pos: Mapping[str, float] | None,
@@ -182,6 +183,8 @@ class FireRule:
         if not self.require_line_of_sight:
             return True, "disabled"
         explicit = _bool_or_none(
+            obs.get("line_of_sight"),
+            obs.get("has_line_of_sight"),
             _mapping(snapshot.get("predicates")).get("line_of_sight"),
             _mapping(snapshot.get("predicates")).get("has_line_of_sight"),
             _mapping(snapshot.get("aim_debug")).get("line_of_sight"),
@@ -214,19 +217,21 @@ class FireRule:
     ) -> tuple[bool | None, str]:
         if not self.require_cooldown_ready:
             return True, "disabled"
-        explicit = _bool_or_none(
-            obs.get("cooldown_ready"),
-            obs.get("can_fire"),
-            _mapping(snapshot.get("fire_debug")).get("cooldown_ready"),
-        )
+        explicit = _bool_or_none(obs.get("can_fire"))
         if explicit is not None:
-            return explicit, "explicit_flag"
+            return explicit, "observation_can_fire"
         cooldown = _number(
             _mapping(snapshot.get("weapon")).get("cooldown_remaining_steps"),
             _mapping(snapshot.get("weapon")).get("fire_cooldown"),
         )
         if cooldown is not None:
             return bool(cooldown <= 0), "weapon_cooldown"
+        explicit = _bool_or_none(
+            obs.get("cooldown_ready"),
+            _mapping(snapshot.get("fire_debug")).get("cooldown_ready"),
+        )
+        if explicit is not None:
+            return explicit, "explicit_cooldown_ready_flag"
         return None, "missing"
 
     def _ammo_available(self, obs: Mapping[str, Any], snapshot: Mapping[str, Any]) -> tuple[bool | None, str]:

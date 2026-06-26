@@ -46,6 +46,7 @@ class PygameCPCViewer:
         map_info = _map_info(env_state)
         self._draw_arena(env_state, map_info, map_area)
         pygame.draw.rect(self.surface, (72, 78, 92), map_rect(map_info, map_area, self.padding), width=2)
+        self._draw_obstacles(env_state, map_info, map_area)
         self._draw_projectiles(env_state, map_info, map_area)
         self._draw_agents(env_state, map_info, map_area, step_record)
         self._draw_panel(env_state, step_record)
@@ -79,6 +80,22 @@ class PygameCPCViewer:
             safe_radius_px,
             width=2 if zone_debug.get("outside_safe_zone") else 1,
         )
+
+    def _draw_obstacles(
+        self,
+        env_state: Mapping[str, Any],
+        map_info: Mapping[str, Any],
+        map_area: tuple[int, int],
+    ) -> None:
+        obstacles = env_state.get("obstacles") or map_info.get("obstacles") or []
+        for obstacle in obstacles:
+            if obstacle.get("type", "circle") != "circle":
+                continue
+            position = {"x": obstacle.get("x", 0.0), "y": obstacle.get("y", 0.0)}
+            center = world_to_screen(position, map_info, map_area, self.padding)
+            radius = max(2, world_radius_to_screen(float(obstacle.get("radius", 0.0)), map_info, map_area, self.padding))
+            self.pygame.draw.circle(self.surface, colors.OBSTACLE, center, radius)
+            self.pygame.draw.circle(self.surface, colors.OBSTACLE_EDGE, center, radius, width=2)
 
     def _draw_agents(
         self,
@@ -160,13 +177,15 @@ class PygameCPCViewer:
 
         bullet_events = _bullet_events(env_state)
         for event in bullet_events:
-            if event.get("type") not in ("bullet_hit", "bullet_expired"):
+            if event.get("type") not in ("bullet_hit", "bullet_expired", "bullet_hit_obstacle"):
                 continue
             position = event.get("pos")
             if not position:
                 continue
             center = world_to_screen(position, map_info, map_area, self.padding)
             color = colors.FIRE if event.get("type") == "bullet_hit" else colors.MUTED
+            if event.get("type") == "bullet_hit_obstacle":
+                color = colors.OBSTACLE_EDGE
             self.pygame.draw.circle(self.surface, color, center, 10, width=2)
 
     def _draw_panel(self, env_state: Mapping[str, Any], step_record: Mapping[str, Any] | None) -> None:
@@ -178,6 +197,14 @@ class PygameCPCViewer:
             rendered = self.font.render(line, True, colors.TEXT if index < 8 else colors.MUTED)
             self.surface.blit(rendered, (left + 14, y))
             y += 23
+        if env_state.get("manual_step", {}).get("save_button"):
+            rect = self.pygame.Rect(left + 14, self.height - 54, self.panel_width - 28, 36)
+            mouse_pos = self.pygame.mouse.get_pos()
+            fill = (60, 70, 88) if rect.collidepoint(mouse_pos) else (48, 55, 70)
+            self.pygame.draw.rect(self.surface, fill, rect, border_radius=6)
+            self.pygame.draw.rect(self.surface, colors.MUTED, rect, width=1, border_radius=6)
+            label = self.font.render("Save Snapshot (G)", True, colors.TEXT)
+            self.surface.blit(label, (rect.centerx - label.get_width() // 2, rect.centery - label.get_height() // 2))
 
 
 def _map_info(env_state: Mapping[str, Any]) -> dict[str, Any]:
@@ -288,12 +315,10 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
     ]
     manual_step = env_state.get("manual_step", {})
     if manual_step:
-        lines.extend(
-            [
-                f"manual: {int(manual_step.get('index', 0))}/{int(manual_step.get('count', 0))}",
-                "f next / b back",
-            ]
-        )
+        lines.append(f"mode: {manual_step.get('mode', 'manual')}")
+        lines.append(f"action: {manual_step.get('current_action', '-')}")
+        for control_line in manual_step.get("controls", []):
+            lines.append(str(control_line))
     lines.extend(["", "reward components"])
     for key, value in list(components.items())[:8]:
         lines.append(f"{key}: {float(value):.3f}")

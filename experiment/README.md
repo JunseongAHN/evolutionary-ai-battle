@@ -329,3 +329,24 @@ python experiment/run_model_gameplay.py --checkpoint-a "C:\Users\PC\Downloads\ch
 The toy CPC training environment intentionally reduces the per-step survival reward to avoid no-op survival reward hacking. Center pressure now shrinks a safe zone over time, and the scripted enemy moves or fires weakly to force engagement instead of allowing the learner to idle.
 
 Reward components are logged separately in `info["reward_components"]` and in `metrics.csv` with `reward_` prefixes, including damage, projectile hits, death/win, survival, enemy approach, aim alignment, shot alignment, missed shots, and zone pressure. These rewards are only PPO training signals; they are not the final CPC evaluation metric.
+
+## YAML Env Manual Debug
+
+The toy CPC env can be created from a small YAML config for manual reset/step debugging:
+
+```powershell
+python scripts/manual_env_debug.py --config configs/env/manual_enemy_right.yaml
+python scripts/manual_env_debug.py --config configs/env/manual_enemy_left.yaml
+python scripts/manual_env_debug.py --config configs/env/manual_enemy_right.yaml --no-gui --actions stay,right,right,aim_right,fire
+```
+
+The script opens a pygame viewer by default and lets you drive the env directly. Use WASD to move, the mouse to aim, Space or `f` to fire, `n` or Enter for a no-op step, `g` or the Save Snapshot button to save debug files, `r` to reset, and `q` or Esc to quit. Use `--no-gui` for console-only scripted smoke checks.
+
+Supported YAML sections are `env.seed`, `env.max_steps`, `env.dt`, `map.width`, `map.height`, `player.spawn`, `player.radius`, `player.hp`, `player.move_speed`, `player.aim_turn_speed`, `player.weapon_range`, `player.fire_cooldown_steps`, `enemies[].id`, `enemies[].spawn`, `enemies[].radius`, `enemies[].hp`, `enemies[].move_speed`, `enemies[].behavior`, `obstacles[]` circle metadata, and `zone.enabled`.
+
+The GUI saves local occupancy grid debug snapshots only when requested with `g` or the Save Snapshot button. Snapshots are written under `experiment/runs/manual_grid_debug/` by default and include both an agent-centered grid PNG and a current env status JSON file. Use `--snapshot-output-dir <dir>` to choose a directory. In the PNG, green is the agent, red is enemy occupancy, gray is obstacle occupancy, and yellow is hazard occupancy.
+
+```powershell
+python scripts/manual_env_debug.py --config configs/env/manual_enemy_right.yaml --snapshot-output-dir experiment/runs/manual_grid_debug/right
+python scripts/manual_env_debug.py --config configs/env/manual_enemy_left.yaml --snapshot-output-dir experiment/runs/manual_grid_debug/left
+```

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import random
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 if __package__:
@@ -27,6 +28,16 @@ else:
         vec_to_aim_bin,
     )
     from cpc_metrics import CpcMetrics
+
+if __package__ == "experiment.training":
+    from experiment.core.env_config import EnvConfig, load_env_config
+elif __package__:
+    from core.env_config import EnvConfig, load_env_config
+else:
+    try:
+        from experiment.core.env_config import EnvConfig, load_env_config
+    except ModuleNotFoundError:
+        from core.env_config import EnvConfig, load_env_config
 
 
 Vec2 = dict[str, float]
@@ -136,7 +147,14 @@ class CPCEnv:
         bullet_range: float | None = None,
         bullet_damage: float | None = None,
         bullet_hit_radius: float | None = None,
+        config: EnvConfig | str | Path | None = None,
     ):
+        self.env_config = self._load_config(config)
+        if self.env_config is not None:
+            if seed == 0:
+                seed = self.env_config.seed
+            if max_steps == 50:
+                max_steps = self.env_config.max_steps
         self.seed = seed
         self.max_steps = max_steps
         self.stage = stage
@@ -164,25 +182,122 @@ class CPCEnv:
         self.randomize_enemy_spawn_direction = bool(randomize_enemy_spawn_direction)
         self.enemy_spawn_directions = self._validate_spawn_directions(enemy_spawn_directions)
         self.enemy_spawn_direction = self._validate_spawn_direction(enemy_spawn_direction)
+        self.dt = 1.0
+        self.self_max_hp = float(self.max_hp)
+        self.ally_max_hp = float(self.max_hp)
+        self.enemy_max_hp = float(self.max_hp)
+        self.player_radius = 12.0
+        self.ally_radius = 12.0
+        self.enemy_radius = 12.0
+        self.player_spawn: Vec2 | None = None
+        self.ally_spawn: Vec2 | None = None
+        self.enemy_spawn: Vec2 | None = None
+        self.enemy_id = "enemy"
+        self.enemy_behavior = "chase"
+        self.obstacles: list[dict[str, Any]] = []
+        self.aim_turn_speed = 1.0
+        if self.env_config is not None:
+            self._apply_env_config(self.env_config)
         self.rng = random.Random(seed)
-        self.metrics = CpcMetrics()
+        self.metrics = self._new_metrics()
         self.trajectory: list[dict[str, Any]] = []
         self.step_count = 0
         self.state: dict[str, Any] = {}
         self.projectiles: list[dict[str, Any]] = []
         self.weapon: dict[str, Any] = {}
+        self.enemy_weapon: dict[str, Any] = {}
         self.last_aim_debug: dict[str, Any] = {}
         self.last_zone_debug: dict[str, Any] = {}
         self.last_fire_debug: dict[str, Any] = {}
         self.current_aim_bin: int = 0
         self.reset(seed=seed)
 
+    @classmethod
+    def from_config(cls, config: EnvConfig | str | Path) -> "CPCEnv":
+        return cls(config=config)
+
+    @staticmethod
+    def _load_config(config: EnvConfig | str | Path | None) -> EnvConfig | None:
+        if config is None:
+            return None
+        if isinstance(config, EnvConfig) or (
+            config.__class__.__name__ == "EnvConfig"
+            and all(hasattr(config, attr) for attr in ("seed", "max_steps", "player", "enemies"))
+        ):
+            return config
+        return load_env_config(config)
+
+    def _apply_env_config(self, config: EnvConfig) -> None:
+        self.dt = float(config.dt)
+        self.width = float(config.map_width)
+        self.height = float(config.map_height)
+        self.center = (
+            {"x": float(config.zone.center.x), "y": float(config.zone.center.y)}
+            if config.zone.center is not None
+            else {"x": self.width / 2.0, "y": self.height / 2.0}
+        )
+        self.shrink_safe_zone = bool(config.zone.enabled)
+        self.use_zone_reward = bool(config.zone.enabled)
+        self.safe_radius_start = float(config.zone.safe_radius_start)
+        self.safe_radius_end = float(config.zone.safe_radius_end)
+
+        self.player_spawn = self._vec_from_config(config.player.spawn)
+        self.player_radius = float(config.player.radius)
+        self.self_max_hp = float(config.player.hp)
+        self.max_hp = float(config.player.hp)
+        self.move_speed = float(config.player.move_speed)
+        self.aim_turn_speed = float(config.player.aim_turn_speed)
+        self.fire_range = float(config.player.weapon_range)
+        self.fire_interval_steps = int(config.player.fire_cooldown_steps)
+
+        if config.ally is not None:
+            self.ally_spawn = self._vec_from_config(config.ally.spawn)
+            self.ally_radius = float(config.ally.radius)
+            self.ally_max_hp = float(config.ally.hp)
+        else:
+            self.ally_spawn = None
+            self.ally_radius = self.player_radius
+            self.ally_max_hp = self.self_max_hp
+
+        if config.enemies:
+            enemy = config.enemies[0]
+            self.enemy_id = enemy.id
+            self.enemy_spawn = self._vec_from_config(enemy.spawn)
+            self.enemy_radius = float(enemy.radius)
+            self.enemy_max_hp = float(enemy.hp)
+            self.enemy_move_speed = float(enemy.move_speed)
+            self.enemy_behavior = enemy.behavior
+            self.enemy_move = enemy.behavior.strip().lower() not in {"stationary", "none", "passive"}
+
+        self.obstacles = [
+            {
+                "id": obstacle.id,
+                "type": obstacle.type,
+                "x": float(obstacle.x),
+                "y": float(obstacle.y),
+                "radius": float(obstacle.radius),
+            }
+            for obstacle in config.obstacles
+        ]
+
+    def _new_metrics(self) -> CpcMetrics:
+        metrics = CpcMetrics()
+        metrics.self_max_hp = float(self.self_max_hp)
+        metrics.enemy_max_hp = float(self.enemy_max_hp)
+        metrics.self_hp = float(self.self_max_hp)
+        metrics.enemy_hp = float(self.enemy_max_hp)
+        return metrics
+
+    @staticmethod
+    def _vec_from_config(value) -> Vec2:
+        return {"x": float(value.x), "y": float(value.y)}
+
     def reset(self, seed: int | None = None) -> dict[str, Any]:
         if seed is not None:
             self.seed = seed
             self.rng.seed(seed)
         self.step_count = 0
-        self.metrics = CpcMetrics()
+        self.metrics = self._new_metrics()
         self.trajectory = []
         self.projectiles = []
         self.last_aim_debug = {}
@@ -193,11 +308,15 @@ class CPCEnv:
             "cooldown_remaining_steps": 0,
             "fire_interval_steps": self.fire_interval_steps,
         }
+        self.enemy_weapon = {
+            "cooldown_remaining_steps": 0,
+            "fire_interval_steps": self.fire_interval_steps,
+        }
         spawn = self._spawn_positions()
         self.state = {
-            "self_hp": self.max_hp,
-            "ally_hp": self.max_hp,
-            "enemy_hp": self.max_hp,
+            "self_hp": self.self_max_hp,
+            "ally_hp": self.ally_max_hp,
+            "enemy_hp": self.enemy_max_hp,
             "self_pos": spawn["self_pos"],
             "ally_pos": spawn["ally_pos"],
             "enemy_pos": spawn["enemy_pos"],
@@ -222,7 +341,7 @@ class CPCEnv:
         ally_under_pressure = self._ally_under_pressure()
         self._script_enemy_pressure()
 
-        damage_dealt, bullet_events = self._update_bullets()
+        damage_dealt, damage_taken_from_bullets, bullet_events = self._update_bullets(dt=self.dt)
         cooldown_before = int(self.weapon["cooldown_remaining_steps"])
         fire_requested = bool(effective_decoded["fire"])
         enemy_distance = self._distance(self.state["self_pos"], self.state["enemy_pos"])
@@ -249,7 +368,16 @@ class CPCEnv:
             bullet_events.append(spawn_event)
         self._tick_weapon_cooldowns()
         cooldown_after = int(self.weapon["cooldown_remaining_steps"])
-        damage_taken = self._resolve_enemy_pressure()
+        suppress_enemy_projectile = bullet_spawned or any(
+            event.get("owner_id") == "self"
+            and event.get("type") in {"bullet_hit", "bullet_hit_obstacle", "bullet_expired"}
+            for event in bullet_events
+        )
+        damage_taken_direct, enemy_fire_events = self._resolve_enemy_pressure(
+            suppress_projectile=suppress_enemy_projectile
+        )
+        bullet_events.extend(enemy_fire_events)
+        damage_taken = damage_taken_from_bullets + damage_taken_direct
         self.step_count += 1
 
         ally_distance = self._distance(self.state["self_pos"], self.state["ally_pos"])
@@ -429,10 +557,12 @@ class CPCEnv:
             "step": self.step_count,
             "step_count": self.step_count,
             "max_steps": self.max_steps,
+            "dt": self.dt,
             "map": {
                 "width": self.width,
                 "height": self.height,
                 "center": dict(self.center),
+                "obstacles": deepcopy(self.obstacles),
                 "safe_radius": self._safe_radius(),
                 "shrink_safe_zone": self.shrink_safe_zone,
                 "use_zone_reward": self.use_zone_reward,
@@ -457,16 +587,24 @@ class CPCEnv:
                 "self": {
                     "position": deepcopy(self.state["self_pos"]),
                     "hp": float(self.state["self_hp"]),
+                    "radius": self.player_radius,
+                    "move_speed": self.move_speed,
+                    "aim_turn_speed": self.aim_turn_speed,
                     "alive": float(self.state["self_hp"]) > 0.0,
                 },
                 "ally": {
                     "position": deepcopy(self.state["ally_pos"]),
                     "hp": float(self.state["ally_hp"]),
+                    "radius": self.ally_radius,
                     "alive": float(self.state["ally_hp"]) > 0.0,
                 },
                 "enemy": {
+                    "id": self.enemy_id,
                     "position": deepcopy(self.state["enemy_pos"]),
                     "hp": float(self.state["enemy_hp"]),
+                    "radius": self.enemy_radius,
+                    "move_speed": self.enemy_move_speed,
+                    "behavior": self.enemy_behavior,
                     "alive": float(self.state["enemy_hp"]) > 0.0,
                 },
             },
@@ -495,8 +633,14 @@ class CPCEnv:
 
     def _move_self(self, move_x: float, move_y: float) -> None:
         pos = self.state["self_pos"]
-        pos["x"] = self._clamp(pos["x"] + move_x * self.move_speed, 0.0, self.width)
-        pos["y"] = self._clamp(pos["y"] + move_y * self.move_speed, 0.0, self.height)
+        start = dict(pos)
+        target = {
+            "x": self._clamp(pos["x"] + move_x * self.move_speed, 0.0, self.width),
+            "y": self._clamp(pos["y"] + move_y * self.move_speed, 0.0, self.height),
+        }
+        resolved = self._resolve_obstacle_blocked_move(start, target, self.player_radius)
+        pos["x"] = resolved["x"]
+        pos["y"] = resolved["y"]
 
     def _effective_decoded_action(self, decoded: dict[str, float]) -> dict[str, float]:
         if not self._should_freeze_movement():
@@ -555,21 +699,12 @@ class CPCEnv:
             }
 
         direction = {"x": aim_x / length, "y": aim_y / length}
-        bullet = {
-            "bullet_id": f"bullet-{self.seed}-{self.step_count}-{len(self.projectiles)}",
-            "owner_id": "self",
-            "spawn_pos": deepcopy(self.state["self_pos"]),
-            "pos": deepcopy(self.state["self_pos"]),
-            "previous_pos": deepcopy(self.state["self_pos"]),
-            "direction": direction,
-            "speed": self.projectile_speed,
-            "max_range": self.fire_range,
-            "traveled_distance": 0.0,
-            "damage": self.damage,
-            "radius": self.projectile_radius,
-            "alive": True,
-        }
-        self.projectiles.append(bullet)
+        bullet = self._spawn_projectile(
+            owner_id="self",
+            position=self.state["self_pos"],
+            direction=direction,
+            damage=self.damage,
+        )
         self.weapon["cooldown_remaining_steps"] = int(self.weapon["fire_interval_steps"])
         return True, None, {
             "type": "bullet_spawned",
@@ -578,18 +713,48 @@ class CPCEnv:
             "pos": deepcopy(bullet["pos"]),
         }
 
+    def _spawn_projectile(
+        self,
+        *,
+        owner_id: str,
+        position: Vec2,
+        direction: Vec2,
+        damage: float,
+    ) -> dict[str, Any]:
+        bullet = {
+            "bullet_id": f"bullet-{self.seed}-{self.step_count}-{len(self.projectiles)}",
+            "owner_id": owner_id,
+            "spawn_pos": deepcopy(position),
+            "pos": deepcopy(position),
+            "previous_pos": deepcopy(position),
+            "direction": deepcopy(direction),
+            "speed": self.projectile_speed,
+            "max_range": self.fire_range,
+            "traveled_distance": 0.0,
+            "damage": float(damage),
+            "radius": self.projectile_radius,
+            "alive": True,
+        }
+        self.projectiles.append(bullet)
+        return bullet
+
     def _tick_weapon_cooldowns(self) -> None:
         self.weapon["cooldown_remaining_steps"] = max(
             0,
             int(self.weapon.get("cooldown_remaining_steps", 0)) - 1,
+        )
+        self.enemy_weapon["cooldown_remaining_steps"] = max(
+            0,
+            int(self.enemy_weapon.get("cooldown_remaining_steps", 0)) - 1,
         )
 
     def _weapon_cooldown_fraction(self) -> float:
         interval = max(1, int(self.weapon.get("fire_interval_steps", self.fire_interval_steps)))
         return max(0.0, min(1.0, int(self.weapon.get("cooldown_remaining_steps", 0)) / interval))
 
-    def _update_bullets(self, dt: float = 1.0) -> tuple[float, list[dict[str, Any]]]:
+    def _update_bullets(self, dt: float = 1.0) -> tuple[float, float, list[dict[str, Any]]]:
         damage_dealt = 0.0
+        damage_taken = 0.0
         events: list[dict[str, Any]] = []
         active_bullets: list[dict[str, Any]] = []
 
@@ -604,6 +769,84 @@ class CPCEnv:
                 "x": float(previous_position["x"]) + (float(direction["x"]) * step_distance),
                 "y": float(previous_position["y"]) + (float(direction["y"]) * step_distance),
             }
+            bullet_radius = float(bullet["radius"])
+            obstacle_hit = self._first_obstacle_hit(previous_position, next_position, moving_radius=bullet_radius)
+            target = self._projectile_target(bullet)
+            target_hit_t = (
+                self._segment_circle_hit_fraction(
+                    previous_position,
+                    next_position,
+                    target["position"],
+                    bullet_radius,
+                )
+                if target is not None
+                else None
+            )
+
+            if obstacle_hit is not None and (target_hit_t is None or obstacle_hit[0] <= target_hit_t):
+                hit_t, obstacle = obstacle_hit
+                hit_position = self._lerp_position(previous_position, next_position, hit_t)
+                traveled = step_distance * hit_t
+                bullet["previous_pos"] = previous_position
+                bullet["pos"] = hit_position
+                bullet["traveled_distance"] = float(bullet.get("traveled_distance", 0.0)) + traveled
+                bullet["alive"] = False
+                events.append(
+                    {
+                        "type": "bullet_moved",
+                        "bullet_id": bullet["bullet_id"],
+                        "owner_id": bullet["owner_id"],
+                        "from": previous_position,
+                        "pos": deepcopy(hit_position),
+                        "traveled_distance": bullet["traveled_distance"],
+                    }
+                )
+                events.append(
+                    {
+                        "type": "bullet_hit_obstacle",
+                        "bullet_id": bullet["bullet_id"],
+                        "owner_id": bullet["owner_id"],
+                        "obstacle_id": obstacle.get("id"),
+                        "pos": deepcopy(hit_position),
+                    }
+                )
+                continue
+
+            if target is not None and target_hit_t is not None:
+                hit_position = self._lerp_position(previous_position, next_position, target_hit_t)
+                traveled = step_distance * target_hit_t
+                bullet["previous_pos"] = previous_position
+                bullet["pos"] = hit_position
+                bullet["traveled_distance"] = float(bullet.get("traveled_distance", 0.0)) + traveled
+                events.append(
+                    {
+                        "type": "bullet_moved",
+                        "bullet_id": bullet["bullet_id"],
+                        "owner_id": bullet["owner_id"],
+                        "from": previous_position,
+                        "pos": deepcopy(hit_position),
+                        "traveled_distance": bullet["traveled_distance"],
+                    }
+                )
+                damage = min(float(bullet["damage"]), float(self.state[target["hp_key"]]))
+                self.state[target["hp_key"]] = max(0.0, float(self.state[target["hp_key"]]) - damage)
+                if target["target_id"] == "enemy":
+                    damage_dealt += damage
+                elif target["target_id"] == "self":
+                    damage_taken += damage
+                bullet["alive"] = False
+                events.append(
+                    {
+                        "type": "bullet_hit",
+                        "bullet_id": bullet["bullet_id"],
+                        "owner_id": bullet["owner_id"],
+                        "target_id": target["target_id"],
+                        "damage": damage,
+                        "pos": deepcopy(hit_position),
+                    }
+                )
+                continue
+
             bullet["previous_pos"] = previous_position
             bullet["pos"] = next_position
             bullet["traveled_distance"] = float(bullet.get("traveled_distance", 0.0)) + step_distance
@@ -617,26 +860,6 @@ class CPCEnv:
                     "traveled_distance": bullet["traveled_distance"],
                 }
             )
-
-            if (
-                float(self.state["enemy_hp"]) > 0.0
-                and self._segment_distance(previous_position, next_position, self.state["enemy_pos"]) <= float(bullet["radius"])
-            ):
-                damage = min(float(bullet["damage"]), float(self.state["enemy_hp"]))
-                self.state["enemy_hp"] = max(0.0, float(self.state["enemy_hp"]) - damage)
-                damage_dealt += damage
-                bullet["alive"] = False
-                events.append(
-                    {
-                        "type": "bullet_hit",
-                        "bullet_id": bullet["bullet_id"],
-                        "owner_id": bullet["owner_id"],
-                        "target_id": "enemy",
-                        "damage": damage,
-                        "pos": deepcopy(next_position),
-                    }
-                )
-                continue
 
             expired = (
                 float(bullet["traveled_distance"]) >= float(bullet["max_range"])
@@ -660,20 +883,147 @@ class CPCEnv:
                 active_bullets.append(bullet)
 
         self.projectiles = active_bullets
-        return damage_dealt, events
+        return damage_dealt, damage_taken, events
 
-    def _resolve_enemy_pressure(self) -> float:
+    def _resolve_obstacle_blocked_move(self, start: Vec2, target: Vec2, moving_radius: float) -> Vec2:
+        obstacle_hit = self._first_obstacle_hit(start, target, moving_radius=moving_radius)
+        if obstacle_hit is None:
+            return target
+
+        hit_t, _ = obstacle_hit
+        return self._lerp_position(start, target, max(0.0, hit_t - 1e-6))
+
+    def _first_obstacle_hit(
+        self,
+        start: Vec2,
+        target: Vec2,
+        *,
+        moving_radius: float,
+    ) -> tuple[float, dict[str, Any]] | None:
+        closest: tuple[float, dict[str, Any]] | None = None
+        for obstacle in self._circle_obstacles():
+            center = {"x": float(obstacle["x"]), "y": float(obstacle["y"])}
+            radius = float(obstacle["radius"]) + float(moving_radius)
+            hit_t = self._segment_circle_hit_fraction(start, target, center, radius)
+            if hit_t is None:
+                continue
+            if closest is None or hit_t < closest[0]:
+                closest = (hit_t, obstacle)
+        return closest
+
+    def _circle_obstacles(self) -> list[dict[str, Any]]:
+        return [
+            obstacle
+            for obstacle in self.obstacles
+            if obstacle.get("type", "circle") == "circle" and float(obstacle.get("radius", 0.0)) > 0.0
+        ]
+
+    @staticmethod
+    def _segment_circle_hit_fraction(start: Vec2, target: Vec2, center: Vec2, radius: float) -> float | None:
+        sx = float(start["x"])
+        sy = float(start["y"])
+        dx = float(target["x"]) - sx
+        dy = float(target["y"]) - sy
+        cx = float(center["x"])
+        cy = float(center["y"])
+        fx = sx - cx
+        fy = sy - cy
+        radius_sq = float(radius) * float(radius)
+        if (fx * fx) + (fy * fy) <= radius_sq:
+            return 0.0
+
+        a = (dx * dx) + (dy * dy)
+        if a <= 1e-9:
+            return None
+
+        b = 2.0 * ((fx * dx) + (fy * dy))
+        c = (fx * fx) + (fy * fy) - radius_sq
+        discriminant = (b * b) - (4.0 * a * c)
+        if discriminant < 0.0:
+            return None
+
+        sqrt_discriminant = math.sqrt(discriminant)
+        for hit_t in ((-b - sqrt_discriminant) / (2.0 * a), (-b + sqrt_discriminant) / (2.0 * a)):
+            if -1e-9 <= hit_t <= 1.0 + 1e-9:
+                return max(0.0, min(1.0, hit_t))
+        return None
+
+    @staticmethod
+    def _lerp_position(start: Vec2, target: Vec2, t: float) -> Vec2:
+        return {
+            "x": float(start["x"]) + ((float(target["x"]) - float(start["x"])) * float(t)),
+            "y": float(start["y"]) + ((float(target["y"]) - float(start["y"])) * float(t)),
+        }
+
+    def _projectile_target(self, bullet: dict[str, Any]) -> dict[str, Any] | None:
+        owner_id = str(bullet.get("owner_id", ""))
+        if owner_id == "self":
+            if float(self.state.get("enemy_hp", 0.0)) <= 0.0:
+                return None
+            return {
+                "target_id": "enemy",
+                "position": self.state["enemy_pos"],
+                "hp_key": "enemy_hp",
+            }
+        if owner_id == "enemy":
+            if float(self.state.get("self_hp", 0.0)) <= 0.0:
+                return None
+            return {
+                "target_id": "self",
+                "position": self.state["self_pos"],
+                "hp_key": "self_hp",
+            }
+        return None
+
+    def _resolve_enemy_pressure(self, *, suppress_projectile: bool = False) -> tuple[float, list[dict[str, Any]]]:
         if not self.enemy_fire:
-            return 0.0
-        damage_taken = 0.0
+            return 0.0, []
         if float(self.state["enemy_hp"]) <= 0.0:
-            return 0.0
+            return 0.0, []
+
+        damage_taken = 0.0
+        events: list[dict[str, Any]] = []
         if self._distance(self.state["enemy_pos"], self.state["ally_pos"]) <= self.fire_range:
             self.state["ally_hp"] = max(0.0, float(self.state["ally_hp"]) - 2.0)
-        if self._distance(self.state["enemy_pos"], self.state["self_pos"]) <= self.fire_range:
+        self_in_range = self._distance(self.state["enemy_pos"], self.state["self_pos"]) <= self.fire_range
+        blocked_by_obstacle = self._line_blocked_by_obstacle(self.state["enemy_pos"], self.state["self_pos"])
+        if self_in_range and not blocked_by_obstacle:
             damage_taken = self.enemy_damage
             self.state["self_hp"] = max(0.0, float(self.state["self_hp"]) - damage_taken)
-        return damage_taken
+
+        if suppress_projectile or int(self.enemy_weapon.get("cooldown_remaining_steps", 0)) > 0:
+            return damage_taken, events
+        if not self_in_range:
+            return damage_taken, events
+
+        direction = normalize_vec(
+            {
+                "x": float(self.state["self_pos"]["x"]) - float(self.state["enemy_pos"]["x"]),
+                "y": float(self.state["self_pos"]["y"]) - float(self.state["enemy_pos"]["y"]),
+            }
+        )
+        if abs(direction["x"]) <= 1e-6 and abs(direction["y"]) <= 1e-6:
+            return damage_taken, events
+
+        bullet = self._spawn_projectile(
+            owner_id="enemy",
+            position=self.state["enemy_pos"],
+            direction=direction,
+            damage=0.0,
+        )
+        self.enemy_weapon["cooldown_remaining_steps"] = int(self.enemy_weapon["fire_interval_steps"])
+        events.append(
+            {
+                "type": "bullet_spawned",
+                "bullet_id": bullet["bullet_id"],
+                "owner_id": bullet["owner_id"],
+                "pos": deepcopy(bullet["pos"]),
+            }
+        )
+        return damage_taken, events
+
+    def _line_blocked_by_obstacle(self, start: Vec2, target: Vec2) -> bool:
+        return self._first_obstacle_hit(start, target, moving_radius=self.projectile_radius) is not None
 
     def _reward_components(
         self,
@@ -703,13 +1053,13 @@ class CPCEnv:
         bullet_hit = any(event.get("type") == "bullet_hit" for event in bullet_events)
         shot_fired = bool(bullet_spawned)
         combat_engaged_this_step = shot_fired or float(damage_dealt) > 0.0 or float(damage_taken) > 0.0
-        enemy_hp_loss_ratio = float(damage_dealt) / max(1.0, self.max_hp)
-        self_hp_loss_ratio = float(damage_taken) / max(1.0, self.max_hp)
+        enemy_hp_loss_ratio = float(damage_dealt) / max(1.0, self.enemy_max_hp)
+        self_hp_loss_ratio = float(damage_taken) / max(1.0, self.self_max_hp)
         episode_done = self._done()
         timeout = self.step_count >= self.max_steps and not enemy_dead and not self_dead
         summary = self.metrics.summary()
-        total_damage_dealt_ratio = (float(summary.get("damage_dealt", 0.0)) + float(damage_dealt)) / max(1.0, self.max_hp)
-        total_damage_taken_ratio = (float(summary.get("damage_taken", 0.0)) + float(damage_taken)) / max(1.0, self.max_hp)
+        total_damage_dealt_ratio = (float(summary.get("damage_dealt", 0.0)) + float(damage_dealt)) / max(1.0, self.enemy_max_hp)
+        total_damage_taken_ratio = (float(summary.get("damage_taken", 0.0)) + float(damage_taken)) / max(1.0, self.self_max_hp)
         prior_shots = int(float(summary.get("shot_fired_count", 0.0)))
         prior_hits = int(float(summary.get("bullet_hit_count", 0.0)))
         episode_shots = prior_shots + int(shot_fired)
@@ -880,6 +1230,20 @@ class CPCEnv:
         return self.safe_radius_start + (self.safe_radius_end - self.safe_radius_start) * progress
 
     def _spawn_positions(self) -> dict[str, Vec2]:
+        if self.player_spawn is not None or self.enemy_spawn is not None:
+            self_pos = deepcopy(self.player_spawn) if self.player_spawn is not None else {"x": 430.0, "y": 500.0}
+            ally_pos = (
+                deepcopy(self.ally_spawn)
+                if self.ally_spawn is not None
+                else {"x": self_pos["x"] - 60.0, "y": self_pos["y"] + 45.0}
+            )
+            enemy_pos = deepcopy(self.enemy_spawn) if self.enemy_spawn is not None else {"x": self_pos["x"] + self.fire_range, "y": self_pos["y"]}
+            return {
+                "self_pos": self_pos,
+                "ally_pos": ally_pos,
+                "enemy_pos": enemy_pos,
+            }
+
         angle = self._spawn_angle()
         if self.enemy_spawn_distance_min is not None or self.enemy_spawn_distance_max is not None:
             low = self.enemy_spawn_distance_min if self.enemy_spawn_distance_min is not None else 0.8 * self.fire_range
