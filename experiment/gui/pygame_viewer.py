@@ -354,6 +354,33 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
                 f"fire: {tactical_debug.get('fire', '-')}",
             ]
         )
+    hierarchical_debug = env_state.get("hierarchical_debug", {})
+    if hierarchical_debug:
+        lines.extend(
+            [
+                "",
+                "hierarchical debug",
+                f"intent: {hierarchical_debug.get('intent', '-')}",
+                f"global: {hierarchical_debug.get('global_plan_reason', '-')}",
+                f"tactical: {hierarchical_debug.get('tactical_mode', '-')}",
+                f"profile: {hierarchical_debug.get('combat_profile', '-')}",
+                f"anchor: {hierarchical_debug.get('anchor', '-')}",
+                f"target: {hierarchical_debug.get('target_cell', '-')}",
+                f"next: {hierarchical_debug.get('next_cell', '-')}",
+                f"fire reason: {hierarchical_debug.get('fire_reason', '-')}",
+                f"mode age/lock: {hierarchical_debug.get('mode_age', 0)}/{hierarchical_debug.get('mode_locked', False)}",
+                f"anchor age/reuse: {hierarchical_debug.get('anchor_age', 0)}/{hierarchical_debug.get('anchor_reused', False)}",
+                f"plan fallback: {hierarchical_debug.get('fallback_previous_plan', False)}",
+                f"range: {hierarchical_debug.get('combat_range_state', '-')} {hierarchical_debug.get('dist_ratio', '-')}",
+                f"strafe: {hierarchical_debug.get('strafe_direction', '-')}",
+                f"perpendicular: {hierarchical_debug.get('perpendicular_strafe', False)}",
+                f"bullet dodge: {hierarchical_debug.get('bullet_dodge_active', False)} {hierarchical_debug.get('dodge_reason', '-')}",
+                f"dodge move: {hierarchical_debug.get('selected_dodge_move', '-')}",
+                f"dodge blocked: {hierarchical_debug.get('dodge_blocked_reasons', {})}",
+                f"range lock: {hierarchical_debug.get('range_hysteresis_locked', False)}",
+                f"combat exit: {hierarchical_debug.get('combat_exit_blocked_reason', '-')}",
+            ]
+        )
     lines.extend(["", "reward components"])
     for key, value in list(components.items())[:8]:
         lines.append(f"{key}: {float(value):.3f}")

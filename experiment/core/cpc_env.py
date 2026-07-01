@@ -902,6 +902,7 @@ class CPCEnv:
             ],
             "owner_id": owner_id,
             "team": "player" if owner_id == "self" else "enemy" if owner_id == "enemy" else None,
+            "radius": float(bullet.get("radius", self.projectile_radius)),
             "ttl": None,
         }
 
@@ -1061,7 +1062,7 @@ class CPCEnv:
                     previous_position,
                     next_position,
                     target["position"],
-                    bullet_radius,
+                    bullet_radius + float(target["radius"]),
                 )
                 if target is not None
                 else None
@@ -1248,6 +1249,7 @@ class CPCEnv:
                 "target_id": "enemy",
                 "position": self.state["enemy_pos"],
                 "hp_key": "enemy_hp",
+                "radius": self.enemy_radius,
             }
         if owner_id == "enemy":
             if float(self.state.get("self_hp", 0.0)) <= 0.0:
@@ -1256,6 +1258,7 @@ class CPCEnv:
                 "target_id": "self",
                 "position": self.state["self_pos"],
                 "hp_key": "self_hp",
+                "radius": self.player_radius,
             }
         return None
 
@@ -1630,9 +1633,8 @@ class CPCEnv:
         )
 
     def _done(self) -> bool:
-        team_dead = float(self.state["self_hp"]) <= 0.0 and float(self.state["ally_hp"]) <= 0.0
-        enemies_dead = float(self.state["enemy_hp"]) <= 0.0
-        return self.step_count >= self.max_steps or team_dead or enemies_dead
+        player_dead = float(self.state["self_hp"]) <= 0.0
+        return self.step_count >= self.max_steps or player_dead
 
     @staticmethod
     def _distance(a: Vec2, b: Vec2) -> float:
