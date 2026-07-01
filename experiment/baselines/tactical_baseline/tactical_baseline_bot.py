@@ -5,20 +5,20 @@ from typing import Any
 
 try:
     from experiment.baselines.aim_oracle import TacticalAimOracleBot
-    from experiment.baselines.move_score import TacticalMoveScorer
-    from experiment.core.cpc_actions import AIM_BINS, MOVE_BINS, decode_action
-    from experiment.core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid
+    from experiment.core.cpc_actions import MOVE_BINS, decode_action
+    from experiment.core.local_occupancy_grid import CHANNEL_ENEMY, CHANNEL_OBSTACLE, build_local_occupancy_grid
 except ModuleNotFoundError:
     from baselines.aim_oracle import TacticalAimOracleBot
-    from baselines.move_score import TacticalMoveScorer
-    from core.cpc_actions import AIM_BINS, MOVE_BINS, decode_action
-    from core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid
+    from core.cpc_actions import MOVE_BINS, decode_action
+    from core.local_occupancy_grid import CHANNEL_ENEMY, CHANNEL_OBSTACLE, build_local_occupancy_grid
 
 from .fire_rule import FireRule
+from .mode_conditioned_bfs_planner import ModeConditionedBFSPlanner
+from .tactical_mode_selector import RuleBasedTacticalModeSelector
 
 
 class TacticalBaselineBot:
-    """Compose aim oracle, move scorer, and fire rule into one env action."""
+    """Compose mode selection, BFS movement, aim oracle, and fire rule."""
 
     def __init__(
         self,
@@ -26,33 +26,39 @@ class TacticalBaselineBot:
         move_scorer: Any,
         fire_rule: FireRule,
         *,
+        tactical_mode_selector: Any | None = None,
         default_move_bin: int = 0,
-        default_aim_bin: int = 0,
     ) -> None:
         self.aim_oracle = aim_oracle
         self.move_scorer = move_scorer
+        self.move_planner = move_scorer
         self.fire_rule = fire_rule
+        self.tactical_mode_selector = tactical_mode_selector or RuleBasedTacticalModeSelector()
         self.default_move_bin = int(default_move_bin)
-        self.default_aim_bin = int(default_aim_bin)
 
     def act(self, obs: Any, state_snapshot: Any | None = None) -> tuple[dict[str, int], dict[str, Any]]:
         snapshot = _normalize_snapshot(state_snapshot)
         observation = _mapping_copy(obs)
         obs_with_grid = _with_local_grid(observation, snapshot)
 
-        aim_bin, aim_debug = self._choose_aim(obs_with_grid)
-        move_bin, move_debug = self._choose_move(observation, snapshot)
+        tactical_mode, mode_debug = self._choose_mode(obs_with_grid, snapshot)
+        aim_action, aim_debug = self._choose_aim(obs_with_grid)
+        move_obs = {
+            **obs_with_grid,
+            **aim_action,
+        }
+        move_bin, move_debug = self._choose_move(move_obs, tactical_mode, snapshot)
         fire_obs = {
-            **observation,
-            "selected_aim_bin": int(aim_bin),
-            "aim_bin": int(aim_bin),
+            **obs_with_grid,
+            **aim_action,
             "move_bin": int(move_bin),
         }
         fire, fire_debug = self._choose_fire(fire_obs, snapshot)
-        action = _action(move_bin=move_bin, aim_bin=aim_bin, fire=fire)
+        action = _action(move_bin=move_bin, aim_action=aim_action, fire=fire)
 
         debug = {
             "action": dict(action),
+            "mode": mode_debug,
             "aim": aim_debug,
             "move": move_debug,
             "fire": fire_debug,
@@ -60,25 +66,45 @@ class TacticalBaselineBot:
         }
         return action, debug
 
-    def _choose_aim(self, obs: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
+    def _choose_mode(self, obs: Mapping[str, Any], snapshot: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+        try:
+            mode, debug = self.tactical_mode_selector.select_mode(obs, state_snapshot=snapshot)
+            return str(mode), dict(debug)
+        except Exception as exc:  # Defensive baseline fallback: seek a safe local position.
+            return "reposition", {
+                "mode": "reposition",
+                "reason": "mode_selector_failed_using_reposition",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    def _choose_aim(self, obs: Mapping[str, Any]) -> tuple[dict[str, float], dict[str, Any]]:
         try:
             aim_action, debug = self.aim_oracle.act(obs)
-            aim_bin = int(aim_action.get("aim", aim_action.get("aim_bin", self.default_aim_bin))) % AIM_BINS
-            return aim_bin, dict(debug)
+            return {
+                "aim_dx": float(aim_action.get("aim_dx", 0.0)),
+                "aim_dy": float(aim_action.get("aim_dy", 0.0)),
+            }, dict(debug)
         except Exception as exc:  # Defensive baseline fallback: keep autoplay running.
-            aim_bin = int(self.default_aim_bin) % AIM_BINS
-            return aim_bin, {
-                "aim_bin": aim_bin,
+            return {"aim_dx": 1.0, "aim_dy": 0.0}, {
                 "reason": "aim_oracle_failed_using_default",
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
-    def _choose_move(self, obs: Mapping[str, Any], snapshot: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
+    def _choose_move(
+        self,
+        obs: Mapping[str, Any],
+        tactical_mode: str,
+        snapshot: Mapping[str, Any],
+    ) -> tuple[int, dict[str, Any]]:
         try:
-            if hasattr(self.move_scorer, "choose_move"):
-                move_bin, debug = self.move_scorer.choose_move(obs, state_snapshot=snapshot)
+            if hasattr(self.move_planner, "choose_move"):
+                move_bin, debug = self.move_planner.choose_move(
+                    obs,
+                    tactical_mode=tactical_mode,
+                    state_snapshot=snapshot,
+                )
                 return _valid_move_bin(move_bin), dict(debug)
-            action, debug = self.move_scorer.act(obs, state_snapshot=snapshot)
+            action, debug = self.move_planner.act(obs, state_snapshot=snapshot)
             return _valid_move_bin(action.get("move", action.get("move_bin", self.default_move_bin))), dict(debug)
         except Exception as exc:  # Defensive baseline fallback: stay still.
             move_bin = _valid_move_bin(self.default_move_bin)
@@ -104,17 +130,23 @@ def build_tactical_baseline_bot(state_snapshot: Any | None = None) -> TacticalBa
     snapshot = _normalize_snapshot(state_snapshot)
     grid = build_local_occupancy_grid(snapshot, agent_id="self")
     enemy_channel = grid.channel_index(CHANNEL_ENEMY)
+    obstacle_channel = grid.channel_index(CHANNEL_OBSTACLE)
+    weapon_range = float(snapshot.get("combat", {}).get("fire_range", 280.0))
     aim_oracle = TacticalAimOracleBot(
-        num_aim_bins=AIM_BINS,
         enemy_channel_index=enemy_channel,
         cell_size=grid.cell_size,
         stay_move_bin=0,
-        default_aim_bin=0,
     )
     return TacticalBaselineBot(
         aim_oracle=aim_oracle,
-        move_scorer=TacticalMoveScorer(),
-        fire_rule=FireRule(num_aim_bins=AIM_BINS),
+        move_scorer=ModeConditionedBFSPlanner(
+            obstacle_channel_index=obstacle_channel,
+            enemy_channel_index=enemy_channel,
+            cell_size=grid.cell_size,
+            weapon_range=weapon_range,
+        ),
+        fire_rule=FireRule(),
+        tactical_mode_selector=RuleBasedTacticalModeSelector(weapon_range=weapon_range),
     )
 
 
@@ -145,16 +177,15 @@ def _with_local_grid(obs: dict[str, Any], snapshot: Mapping[str, Any]) -> dict[s
         return obs
 
 
-def _action(*, move_bin: int, aim_bin: int, fire: int) -> dict[str, int]:
+def _action(*, move_bin: int, aim_action: Mapping[str, Any], fire: int) -> dict[str, int | float]:
     move = _valid_move_bin(move_bin)
-    aim = int(aim_bin) % AIM_BINS
     selected_fire = _valid_fire(fire)
     action = {
         "move": move,
-        "aim": aim,
+        "aim_dx": float(aim_action.get("aim_dx", 1.0)),
+        "aim_dy": float(aim_action.get("aim_dy", 0.0)),
         "fire": selected_fire,
         "move_bin": move,
-        "aim_bin": aim,
     }
     decode_action(action)
     return action

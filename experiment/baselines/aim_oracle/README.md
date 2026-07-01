@@ -2,15 +2,15 @@
 
 This aim oracle is a deterministic baseline and debugging tool. It is not the final learned policy.
 
-Movement is fixed to `STAY`. Fire is fixed to `0`. The only intended behavior in this PR is enemy-cell-to-aim-bin mapping from the local occupancy grid.
+Movement is fixed to `STAY`. Fire is fixed to `0`. Aim is a normalized continuous direction calculated from `enemy_pos - self_pos`.
 
 ## Why It Exists
 
 The oracle makes aim bugs easy to attribute by isolating a short chain:
 
-1. enemy placement in the local occupancy grid
-2. grid cell to local vector conversion
-3. local vector to `aim_bin` conversion
+1. player and enemy world positions in the observation
+2. enemy-relative direction calculation
+3. continuous action decoding
 4. action sent to the env
 
 It lives under `experiment/baselines/aim_oracle/` so the core env, schemas, training adapters, and production agent paths do not import it.
@@ -46,31 +46,31 @@ dx = (cell_x - center_x) * cell_size
 dy = (cell_y - center_y) * cell_size
 ```
 
-Aim bin `0` points right along `+x`. Bins follow the existing CPC action convention. Because positive y is down, increasing bins rotate clockwise on screen. With 16 bins:
+The continuous aim direction is normalized before it is returned:
 
 ```text
-right = 0
-down  = 4
-left  = 8
-up    = 12
+right = ( 1,  0)
+down  = ( 0,  1)
+left  = (-1,  0)
+up    = ( 0, -1)
 ```
 
 ## Known Limitations
 
-The bot chooses the nearest active enemy cell in the local grid. It does not score tactical movement, choose firing windows, reason about obstacles, or predict future enemy motion.
+When world positions are unavailable, the bot falls back to the nearest active enemy cell in the local grid. It does not predict future enemy motion.
 
 The returned env action uses the existing CPC raw action schema:
 
 ```python
-{"move": 0, "aim": computed_aim_bin, "fire": 0}
+{"move": 0, "aim_dx": normalized_dx, "aim_dy": normalized_dy, "fire": 0}
 ```
 
-Debug output includes `enemy_cell`, `local_vector`, `aim_bin`, and `reason`.
+Debug output includes `enemy_cell`, `local_vector`, `aim_direction`, `aim_source`, and `reason`.
 
 ## Future Usage
 
-1. Imitation learning label generator: `local_occupancy_grid -> aim_oracle -> aim_bin label`
-2. PPO auxiliary target: add cross-entropy loss between learned `aim_head` and oracle `aim_bin`
+1. Imitation learning label generator: `positions -> aim_oracle -> continuous direction label`
+2. PPO auxiliary target: regress or cosine-match the learned aim direction to the oracle
 3. Hybrid controller: use oracle aim while RL learns movement/fire first
-4. Debugging oracle: compare learned agent `aim_bin` with oracle `aim_bin` to attribute aim mistakes
+4. Debugging oracle: compare learned and oracle aim vectors to attribute aim mistakes
 5. Baseline comparison: learned policy should not perform worse than oracle on simple aim scenarios

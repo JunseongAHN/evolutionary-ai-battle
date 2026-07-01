@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from typing import Mapping, TypedDict
+from typing import Any, Mapping, TypedDict
 
 
 MOVE_BINS = 9
@@ -91,20 +91,17 @@ def circular_bin_distance(a: int, b: int, num_bins: int) -> int:
     return min(distance, int(num_bins) - distance)
 
 
-def decode_action(action: Mapping[str, int]) -> EngineAction:
+def decode_action(action: Mapping[str, Any]) -> EngineAction:
     move = int(action["move"])
-    aim = int(action["aim"])
     fire = int(action["fire"])
 
     if move not in MOVE_VECTORS:
         raise ValueError(f"move must be in [0, {MOVE_BINS - 1}], got {move}")
-    if not 0 <= aim < AIM_BINS:
-        raise ValueError(f"aim must be in [0, {AIM_BINS - 1}], got {aim}")
     if fire not in (0, 1):
         raise ValueError(f"fire must be 0 or 1, got {fire}")
 
     move_x, move_y = normalize_move(*MOVE_VECTORS[move])
-    aim_vec = aim_bin_to_vec(aim, AIM_BINS)
+    aim_vec = _decode_aim_vector(action)
     return {
         "moveX": move_x,
         "moveY": move_y,
@@ -112,6 +109,32 @@ def decode_action(action: Mapping[str, int]) -> EngineAction:
         "aimY": aim_vec["y"],
         "fire": fire,
     }
+
+
+def _decode_aim_vector(action: Mapping[str, Any]) -> dict[str, float]:
+    if "aim_dx" in action or "aim_dy" in action:
+        x = float(action.get("aim_dx", 0.0))
+        y = float(action.get("aim_dy", 0.0))
+        length = math.hypot(x, y)
+        if length <= 1e-6:
+            raise ValueError("continuous aim direction must be non-zero")
+        return {"x": x / length, "y": y / length}
+    if "aim_angle" in action:
+        angle = float(action["aim_angle"])
+        return {"x": math.cos(angle), "y": math.sin(angle)}
+    if "aim_x" in action or "aim_y" in action:
+        x = float(action.get("aim_x", 0.0))
+        y = float(action.get("aim_y", 0.0))
+        length = math.hypot(x, y)
+        if length <= 1e-6:
+            raise ValueError("continuous aim direction must be non-zero")
+        return {"x": x / length, "y": y / length}
+    if "aim" not in action:
+        raise ValueError("action must include aim_dx/aim_dy, aim_x/aim_y, aim_angle, or legacy aim")
+    aim = int(action["aim"])
+    if not 0 <= aim < AIM_BINS:
+        raise ValueError(f"aim must be in [0, {AIM_BINS - 1}], got {aim}")
+    return aim_bin_to_vec(aim, AIM_BINS)
 
 
 def random_action(rng: random.Random | None = None) -> RawAction:
@@ -123,7 +146,7 @@ def random_action(rng: random.Random | None = None) -> RawAction:
     }
 
 
-def describe_action(action: Mapping[str, int]) -> dict:
+def describe_action(action: Mapping[str, Any]) -> dict:
     decoded = decode_action(action)
     return {
         "rawAction": dict(action),

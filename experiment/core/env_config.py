@@ -20,6 +20,7 @@ class PlayerConfig:
     aim_turn_speed: float
     weapon_range: float
     fire_cooldown_steps: int
+    bullet_speed: float
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,17 @@ class ZoneConfig:
 
 
 @dataclass(frozen=True)
+class GoalConfig:
+    enabled: bool = False
+    position: Vec2Config | None = None
+    radius: float = 24.0
+    respawn_on_reach: bool = True
+    spawn_enemy_on_reach: bool = False
+    respawn_margin: float = 80.0
+    max_respawns: int | None = None
+
+
+@dataclass(frozen=True)
 class EnvConfig:
     seed: int
     max_steps: int
@@ -67,6 +79,7 @@ class EnvConfig:
     enemies: list[EnemyConfig]
     obstacles: list[ObstacleConfig] = field(default_factory=list)
     zone: ZoneConfig = field(default_factory=ZoneConfig)
+    goal: GoalConfig = field(default_factory=GoalConfig)
     ally: AllyConfig | None = None
 
 
@@ -85,6 +98,7 @@ def default_env_config() -> EnvConfig:
             aim_turn_speed=1.0,
             weapon_range=280.0,
             fire_cooldown_steps=5,
+            bullet_speed=140.0,
         ),
         ally=AllyConfig(
             spawn=Vec2Config(370.0, 545.0),
@@ -103,6 +117,7 @@ def default_env_config() -> EnvConfig:
         ],
         obstacles=[],
         zone=ZoneConfig(enabled=False, center=Vec2Config(500.0, 500.0)),
+        goal=GoalConfig(),
     )
 
 
@@ -138,12 +153,14 @@ def env_config_from_dict(data: dict[str, Any]) -> EnvConfig:
     map_data = _mapping(data.get("map", {}), "map")
     player_data = _mapping(data.get("player", {}), "player")
     zone_data = _mapping(data.get("zone", {}), "zone")
+    goal_data = _mapping(data.get("goal", {}), "goal")
 
     player = _player_config(player_data, defaults.player)
     ally = _ally_config(data.get("ally"), defaults.ally)
     enemies = _enemy_configs(data.get("enemies"), defaults.enemies)
     obstacles = _obstacle_configs(data.get("obstacles"))
     zone = _zone_config(zone_data, defaults.zone)
+    goal = _goal_config(goal_data, defaults.goal)
 
     return EnvConfig(
         seed=_int(env_data, "seed", defaults.seed),
@@ -155,6 +172,7 @@ def env_config_from_dict(data: dict[str, Any]) -> EnvConfig:
         enemies=enemies,
         obstacles=obstacles,
         zone=zone,
+        goal=goal,
         ally=ally,
     )
 
@@ -168,6 +186,7 @@ def _player_config(data: dict[str, Any], defaults: PlayerConfig) -> PlayerConfig
         aim_turn_speed=_float(data, "aim_turn_speed", defaults.aim_turn_speed),
         weapon_range=_float(data, "weapon_range", defaults.weapon_range),
         fire_cooldown_steps=_int(data, "fire_cooldown_steps", defaults.fire_cooldown_steps),
+        bullet_speed=_float(data, "bullet_speed", defaults.bullet_speed),
     )
 
 
@@ -242,6 +261,26 @@ def _zone_config(data: dict[str, Any], defaults: ZoneConfig) -> ZoneConfig:
         center=center,
         safe_radius_start=_float(data, "safe_radius_start", defaults.safe_radius_start),
         safe_radius_end=_float(data, "safe_radius_end", defaults.safe_radius_end),
+    )
+
+
+def _goal_config(data: dict[str, Any], defaults: GoalConfig) -> GoalConfig:
+    position = (
+        defaults.position
+        if "position" not in data
+        else None
+        if data.get("position") is None
+        else _vec2_config(data["position"], defaults.position or Vec2Config(0.0, 0.0), "goal.position")
+    )
+    max_respawns = data.get("max_respawns", defaults.max_respawns)
+    return GoalConfig(
+        enabled=_bool(data, "enabled", defaults.enabled),
+        position=position,
+        radius=_float(data, "radius", defaults.radius),
+        respawn_on_reach=_bool(data, "respawn_on_reach", defaults.respawn_on_reach),
+        spawn_enemy_on_reach=_bool(data, "spawn_enemy_on_reach", defaults.spawn_enemy_on_reach),
+        respawn_margin=_float(data, "respawn_margin", defaults.respawn_margin),
+        max_respawns=None if max_respawns is None else int(max_respawns),
     )
 
 
@@ -385,6 +424,7 @@ __all__ = [
     "AllyConfig",
     "EnemyConfig",
     "EnvConfig",
+    "GoalConfig",
     "ObstacleConfig",
     "PlayerConfig",
     "Vec2Config",

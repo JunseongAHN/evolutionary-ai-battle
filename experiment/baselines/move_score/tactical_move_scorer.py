@@ -13,6 +13,11 @@ from .move_score_terms import (
     strafe_score,
 )
 
+try:
+    from experiment.core.cpc_actions import aim_bin_to_vec
+except ModuleNotFoundError:
+    from core.cpc_actions import aim_bin_to_vec
+
 
 @dataclass(frozen=True)
 class MoveScoringContext:
@@ -24,6 +29,9 @@ class MoveScoringContext:
     move_speed: float
     dt: float
     fire_range: float
+    projectile_radius: float
+    selected_aim_bin: int | None
+    cooldown_ready: bool
     obstacles: list[Mapping[str, Any]]
 
 
@@ -33,24 +41,36 @@ class TacticalMoveScorer:
     def __init__(
         self,
         ideal_range_ratio: float = 0.7,
+        spacing_tolerance_ratio: float = 0.1,
         collision_penalty: float = 1000.0,
         boundary_penalty: float = 1000.0,
         spacing_weight: float = 1.0,
         threat_weight: float = 2.0,
-        strafe_weight: float = 1.0,
+        strafe_weight: float = 8.0,
+        stay_penalty: float = 1.0,
+        strafe_direction: int = 1,
+        shot_alignment_penalty: float = 50.0,
     ) -> None:
         self.ideal_range_ratio = float(ideal_range_ratio)
+        self.spacing_tolerance_ratio = float(spacing_tolerance_ratio)
         self.collision_penalty = float(collision_penalty)
         self.boundary_penalty = float(boundary_penalty)
         self.spacing_weight = float(spacing_weight)
         self.threat_weight = float(threat_weight)
         self.strafe_weight = float(strafe_weight)
+        self.stay_penalty = float(stay_penalty)
+        self.strafe_direction = 1 if int(strafe_direction) >= 0 else -1
+        self.shot_alignment_penalty = float(shot_alignment_penalty)
 
     def choose_move(self, obs: Mapping[str, Any], state_snapshot: Any | None = None) -> tuple[int, dict[str, Any]]:
         context = _build_context(obs, state_snapshot)
         candidate_scores: dict[int, dict[str, Any]] = {}
         ideal_range = max(0.0, context.fire_range * self.ideal_range_ratio)
+        spacing_tolerance = max(0.0, context.fire_range * self.spacing_tolerance_ratio)
         enemy_threat_range = max(context.self_radius * 2.0, context.fire_range * 0.25)
+        current_enemy_distance = (
+            _distance(context.self_pos, context.enemy_pos) if context.enemy_pos is not None else None
+        )
 
         for move_bin, move_vector in iter_move_candidates():
             candidate_x, candidate_y = simulate_candidate_position(
@@ -79,12 +99,14 @@ class TacticalMoveScorer:
             spacing_term = 0.0
             threat_term = 0.0
             strafe_term = 0.0
+            shot_alignment_term = 0.0
             if context.enemy_pos is not None:
                 spacing_term = enemy_spacing_score(
                     candidate_pos,
                     context.enemy_pos,
                     ideal_range,
                     self.spacing_weight,
+                    spacing_tolerance,
                 )
                 threat_term = enemy_threat_penalty(
                     candidate_pos,
@@ -99,9 +121,33 @@ class TacticalMoveScorer:
                         context.self_pos,
                         context.enemy_pos,
                         self.strafe_weight,
+                        self.strafe_direction,
+                    )
+                if (
+                    context.cooldown_ready
+                    and context.selected_aim_bin is not None
+                    and current_enemy_distance is not None
+                    and current_enemy_distance <= context.fire_range
+                ):
+                    shot_alignment_term = _shot_alignment_penalty(
+                        candidate_pos,
+                        context.enemy_pos,
+                        context.selected_aim_bin,
+                        context.fire_range,
+                        context.projectile_radius,
+                        self.shot_alignment_penalty,
                     )
 
-            total = collision_term + boundary_term + spacing_term + threat_term + strafe_term
+            stay_term = -self.stay_penalty if context.enemy_pos is not None and int(move_bin) == 0 else 0.0
+            total = (
+                collision_term
+                + boundary_term
+                + spacing_term
+                + threat_term
+                + strafe_term
+                + shot_alignment_term
+                + stay_term
+            )
             candidate_scores[move_bin] = {
                 "total": float(total),
                 "collision_penalty": float(collision_term),
@@ -109,6 +155,8 @@ class TacticalMoveScorer:
                 "spacing_score": float(spacing_term),
                 "threat_penalty": float(threat_term),
                 "strafe_score": float(strafe_term),
+                "shot_alignment_penalty": float(shot_alignment_term),
+                "stay_penalty": float(stay_term),
                 "candidate_pos": [float(candidate_x), float(candidate_y)],
                 "move_vector": [float(move_vector[0]), float(move_vector[1])],
             }
@@ -126,9 +174,12 @@ class TacticalMoveScorer:
                     else None
                 ),
                 "ideal_range": float(ideal_range),
+                "spacing_tolerance": float(spacing_tolerance),
                 "enemy_threat_range": float(enemy_threat_range),
                 "move_speed": float(context.move_speed),
                 "dt": float(context.dt),
+                "selected_aim_bin": context.selected_aim_bin,
+                "cooldown_ready": bool(context.cooldown_ready),
             },
         }
         return int(selected_move_bin), debug
@@ -157,6 +208,7 @@ def _build_context(obs: Mapping[str, Any], state_snapshot: Any | None) -> MoveSc
     enemy_agent = _mapping(agents.get("enemy"))
     map_data = _mapping(snapshot.get("map"))
     combat = _mapping(snapshot.get("combat"))
+    weapon = _mapping(snapshot.get("weapon"))
 
     self_pos = _position(
         self_agent.get("position"),
@@ -175,6 +227,9 @@ def _build_context(obs: Mapping[str, Any], state_snapshot: Any | None) -> MoveSc
         move_speed=float(self_agent.get("move_speed", obs.get("move_speed", 35.0))),
         dt=float(snapshot.get("dt", obs.get("dt", 1.0))),
         fire_range=float(combat.get("fire_range", obs.get("fire_range", 280.0))),
+        projectile_radius=float(combat.get("projectile_radius", obs.get("projectile_radius", 12.0))),
+        selected_aim_bin=_int_or_none(obs.get("selected_aim_bin"), obs.get("aim_bin"), obs.get("current_aim_bin")),
+        cooldown_ready=_cooldown_ready(obs, weapon),
         obstacles=list(map_data.get("obstacles", snapshot.get("obstacles", [])) or []),
     )
 
@@ -227,8 +282,93 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _int_or_none(*values: Any) -> int | None:
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _cooldown_ready(obs: Mapping[str, Any], weapon: Mapping[str, Any]) -> bool:
+    explicit = _bool_or_none(obs.get("can_fire"))
+    if explicit is not None:
+        return explicit
+    cooldown = weapon.get("cooldown_remaining_steps")
+    if cooldown is not None:
+        try:
+            return float(cooldown) <= 0.0
+        except (TypeError, ValueError):
+            pass
+    explicit = _bool_or_none(obs.get("cooldown_ready"))
+    if explicit is not None:
+        return explicit
+    return False
+
+
+def _bool_or_none(*values: Any) -> bool | None:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+    return None
+
+
 def _distance(a: Mapping[str, float], b: Mapping[str, float]) -> float:
     return math.hypot(float(a["x"]) - float(b["x"]), float(a["y"]) - float(b["y"]))
+
+
+def _shot_alignment_penalty(
+    candidate_pos: Mapping[str, float],
+    enemy_pos: Mapping[str, float],
+    selected_aim_bin: int,
+    fire_range: float,
+    projectile_radius: float,
+    penalty: float,
+) -> float:
+    aim = aim_bin_to_vec(int(selected_aim_bin))
+    ray_end = {
+        "x": float(candidate_pos["x"]) + (float(aim["x"]) * float(fire_range)),
+        "y": float(candidate_pos["y"]) + (float(aim["y"]) * float(fire_range)),
+    }
+    miss_distance = _segment_distance(candidate_pos, ray_end, enemy_pos) - max(0.0, float(projectile_radius))
+    if miss_distance <= 0.0:
+        return 0.0
+    return -float(penalty)
+
+
+def _segment_distance(
+    start: Mapping[str, float],
+    target: Mapping[str, float],
+    point: Mapping[str, float],
+) -> float:
+    sx = float(start["x"])
+    sy = float(start["y"])
+    tx = float(target["x"])
+    ty = float(target["y"])
+    px = float(point["x"])
+    py = float(point["y"])
+    dx = tx - sx
+    dy = ty - sy
+    length_sq = (dx * dx) + (dy * dy)
+    if length_sq <= 1e-12:
+        return math.hypot(px - sx, py - sy)
+    t = max(0.0, min(1.0, (((px - sx) * dx) + ((py - sy) * dy)) / length_sq))
+    closest_x = sx + (t * dx)
+    closest_y = sy + (t * dy)
+    return math.hypot(px - closest_x, py - closest_y)
 
 
 def _reason(selected: Mapping[str, Any], has_enemy: bool) -> str:

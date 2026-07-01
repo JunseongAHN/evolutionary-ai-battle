@@ -4,12 +4,6 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-try:
-    from experiment.core.cpc_actions import AIM_BINS, circular_bin_distance, vec_to_aim_bin
-except ModuleNotFoundError:
-    from core.cpc_actions import AIM_BINS, circular_bin_distance, vec_to_aim_bin
-
-
 class FireRule:
     """Deterministic tactical fire gate.
 
@@ -24,13 +18,11 @@ class FireRule:
         require_in_range: bool = True,
         require_line_of_sight: bool = True,
         require_cooldown_ready: bool = True,
-        num_aim_bins: int = AIM_BINS,
     ) -> None:
         self.aim_error_threshold = float(aim_error_threshold)
         self.require_in_range = bool(require_in_range)
         self.require_line_of_sight = bool(require_line_of_sight)
         self.require_cooldown_ready = bool(require_cooldown_ready)
-        self.num_aim_bins = max(1, int(num_aim_bins))
 
     def decide_fire(self, obs: Any, state_snapshot: Any | None = None) -> tuple[int, dict[str, Any]]:
         observation = _mapping(obs)
@@ -126,43 +118,30 @@ class FireRule:
         self_pos: Mapping[str, float] | None,
         enemy_pos: Mapping[str, float] | None,
     ) -> tuple[float | None, int | None, str]:
-        selected_aim_bin = _int_or_none(
-            obs.get("selected_aim_bin"),
-            obs.get("aim_bin"),
-            obs.get("current_aim_bin"),
-            _mapping(snapshot.get("aim_debug")).get("aim_bin"),
-            _mapping(snapshot.get("fire_debug")).get("current_aim_bin"),
-        )
-        ideal_aim_bin = None
-        if self_pos is not None and enemy_pos is not None:
-            ideal_aim_bin = vec_to_aim_bin(
-                {
-                    "x": float(enemy_pos["x"]) - float(self_pos["x"]),
-                    "y": float(enemy_pos["y"]) - float(self_pos["y"]),
-                },
-                self.num_aim_bins,
-            )
-        if ideal_aim_bin is None:
-            ideal_aim_bin = _int_or_none(
-                obs.get("gt_ideal_aim_bin"),
-                obs.get("ideal_aim_bin"),
-                _mapping(snapshot.get("aim_debug")).get("ideal_aim_bin"),
-                _mapping(snapshot.get("fire_debug")).get("ideal_aim_bin"),
-            )
-        if selected_aim_bin is not None and ideal_aim_bin is not None:
-            bin_error = circular_bin_distance(selected_aim_bin, ideal_aim_bin, self.num_aim_bins)
-            return self._normalize_bin_error(bin_error), int(bin_error), "selected_vs_ideal_aim_bin"
+        aim_direction = _continuous_aim_direction(obs)
+        if aim_direction is not None and self_pos is not None and enemy_pos is not None:
+            target_x = float(enemy_pos["x"]) - float(self_pos["x"])
+            target_y = float(enemy_pos["y"]) - float(self_pos["y"])
+            target_length = math.hypot(target_x, target_y)
+            if target_length > 1e-6:
+                dot_product = (
+                    (aim_direction[0] * target_x / target_length)
+                    + (aim_direction[1] * target_y / target_length)
+                )
+                angle_error = math.acos(max(-1.0, min(1.0, dot_product)))
+                return angle_error / math.pi, None, "continuous_aim_and_enemy_positions"
 
         explicit_error = _number(
             obs.get("aim_error"),
             _mapping(snapshot.get("fire_debug")).get("aim_error"),
-            _mapping(snapshot.get("aim_debug")).get("aim_bin_error"),
+            _mapping(snapshot.get("aim_debug")).get("aim_error"),
+            _mapping(snapshot.get("aim_debug")).get("angle_error_deg"),
         )
         if explicit_error is not None:
-            if float(explicit_error).is_integer():
-                bin_error = int(explicit_error)
-                return self._normalize_bin_error(bin_error), bin_error, "explicit_bin_error"
-            return float(explicit_error), None, "explicit_normalized_error"
+            value = float(explicit_error)
+            if value > 1.0:
+                value = min(1.0, value / 180.0)
+            return value, None, "explicit_continuous_error"
 
         aim_aligned = _bool_or_none(
             obs.get("aim_aligned"),
@@ -244,10 +223,6 @@ class FireRule:
         if ammo is None:
             return None, "missing"
         return bool(ammo > 0), "weapon_ammo"
-
-    def _normalize_bin_error(self, bin_error: int) -> float:
-        half_turn_bins = max(1.0, float(self.num_aim_bins) / 2.0)
-        return float(bin_error) / half_turn_bins
 
 
 def _normalize_snapshot(state_snapshot: Any | None) -> dict[str, Any]:
@@ -345,6 +320,17 @@ def _bool_or_none(*values: Any) -> bool | None:
 
 def _distance(a: Mapping[str, float], b: Mapping[str, float]) -> float:
     return math.hypot(float(a["x"]) - float(b["x"]), float(a["y"]) - float(b["y"]))
+
+
+def _continuous_aim_direction(obs: Mapping[str, Any]) -> tuple[float, float] | None:
+    if "aim_dx" not in obs and "aim_dy" not in obs:
+        return None
+    aim_x = float(_number(obs.get("aim_dx")) or 0.0)
+    aim_y = float(_number(obs.get("aim_dy")) or 0.0)
+    length = math.hypot(aim_x, aim_y)
+    if length <= 1e-6:
+        return None
+    return aim_x / length, aim_y / length
 
 
 def _obstacles(snapshot: Mapping[str, Any]) -> list[Mapping[str, Any]]:

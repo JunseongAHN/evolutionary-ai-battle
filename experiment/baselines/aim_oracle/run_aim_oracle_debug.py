@@ -13,13 +13,11 @@ for path in (REPO_ROOT, EXPERIMENT_ROOT):
 
 try:
     from experiment.baselines.aim_oracle.tactical_aim_oracle_bot import TacticalAimOracleBot
-    from experiment.core.cpc_actions import AIM_BINS
     from experiment.core.cpc_env import CPCEnv
     from experiment.core.env_config import load_env_config
     from experiment.core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid, render_grid_to_png
 except ModuleNotFoundError:
     from baselines.aim_oracle.tactical_aim_oracle_bot import TacticalAimOracleBot
-    from core.cpc_actions import AIM_BINS
     from core.cpc_env import CPCEnv
     from core.env_config import load_env_config
     from core.local_occupancy_grid import CHANNEL_ENEMY, build_local_occupancy_grid, render_grid_to_png
@@ -31,7 +29,6 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--output-dir", default="experiment/runs/aim_oracle_debug")
     parser.add_argument("--save-png", action="store_true", help="Save local occupancy grid PNGs per step.")
-    parser.add_argument("--num-aim-bins", type=int, default=AIM_BINS)
     parser.add_argument("--enemy-channel-index", type=int)
     parser.add_argument("--cell-size", type=float)
     parser.add_argument("--stay-move-bin", type=int, default=0)
@@ -42,7 +39,6 @@ def main() -> None:
         steps=args.steps,
         output_dir=pathlib.Path(args.output_dir),
         save_png=args.save_png,
-        num_aim_bins=args.num_aim_bins,
         enemy_channel_index=args.enemy_channel_index,
         cell_size=args.cell_size,
         stay_move_bin=args.stay_move_bin,
@@ -55,7 +51,6 @@ def run_aim_oracle_debug(
     steps: int,
     output_dir: pathlib.Path,
     save_png: bool,
-    num_aim_bins: int,
     enemy_channel_index: int | None,
     cell_size: float | None,
     stay_move_bin: int,
@@ -70,11 +65,9 @@ def run_aim_oracle_debug(
         else initial_grid.channel_index(CHANNEL_ENEMY)
     )
     bot = TacticalAimOracleBot(
-        num_aim_bins=num_aim_bins,
         enemy_channel_index=enemy_channel,
         cell_size=float(cell_size if cell_size is not None else initial_grid.cell_size),
         stay_move_bin=stay_move_bin,
-        default_aim_bin=0,
     )
 
     if save_png:
@@ -140,7 +133,8 @@ def _print_step(
         f"enemy={_format_position(enemy)}",
         f"enemy_cell={oracle_debug.get('enemy_cell')}",
         f"local_vector={oracle_debug.get('local_vector')}",
-        f"aim_bin={oracle_debug.get('aim_bin')}",
+        f"aim_direction={oracle_debug.get('aim_direction')}",
+        f"aim_source={oracle_debug.get('aim_source')}",
         f"action={action}",
         f"reward={float(reward):.4f}",
         f"done={bool(done)}",

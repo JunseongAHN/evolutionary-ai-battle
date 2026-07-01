@@ -24,6 +24,7 @@ def test_load_env_config_manual_enemy_right():
     assert config.player.move_speed == pytest.approx(8.0)
     assert config.enemies[0].spawn.x > config.player.spawn.x
     assert config.enemies[0].move_speed == pytest.approx(2.0)
+    assert config.enemies[0].behavior == "pursue"
 
 
 def test_env_from_config_uses_spawn_positions():
@@ -50,7 +51,7 @@ def test_env_from_config_uses_movement_speeds():
     assert env.move_speed == pytest.approx(config.player.move_speed)
     assert env.enemy_move_speed == pytest.approx(config.enemies[0].move_speed)
     assert env.state["self_pos"]["x"] == pytest.approx(before_player_x + config.player.move_speed)
-    assert env.state["enemy_pos"]["x"] == pytest.approx(before_enemy_x)
+    assert env.state["enemy_pos"]["x"] < before_enemy_x
 
 
 def test_existing_env_creation_path_still_works():

@@ -140,6 +140,15 @@ def test_move_scorer_backs_off_or_strafes_when_enemy_is_too_close():
     assert _distance(selected_pos, snapshot["state"]["enemy_pos"]) >= current_dist
 
 
+def test_move_scorer_keeps_strafing_near_ideal_range():
+    snapshot = _snapshot(self_pos=(420.0, 380.0), enemy_pos=(600.0, 400.0), fire_range=260.0)
+
+    selected, debug = TacticalMoveScorer().choose_move(_obs(snapshot), snapshot)
+
+    assert selected != 0
+    assert debug["candidate_scores"][selected]["strafe_score"] > 0.0
+
+
 def test_move_scorer_returns_score_breakdown_for_all_candidates():
     snapshot = _snapshot()
     scorer = TacticalMoveScorer()

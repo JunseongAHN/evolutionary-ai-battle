@@ -60,10 +60,12 @@ def enemy_spacing_score(
     enemy_pos: VecLike,
     ideal_range: float,
     weight: float,
+    tolerance: float = 0.0,
 ) -> float:
-    """Prefer distances close to the configured ideal range."""
+    """Prefer distances close to the configured ideal range, allowing a deadband."""
     distance = _distance(_xy(candidate_pos), _xy(enemy_pos))
-    return -float(weight) * abs(distance - float(ideal_range))
+    error = max(0.0, abs(distance - float(ideal_range)) - max(0.0, float(tolerance)))
+    return -float(weight) * error
 
 
 def enemy_threat_penalty(
@@ -85,8 +87,9 @@ def strafe_score(
     self_pos: VecLike,
     enemy_pos: VecLike,
     weight: float,
+    direction: int = 1,
 ) -> float:
-    """Reward perpendicular movement relative to the enemy direction."""
+    """Reward perpendicular movement in a consistent orbit direction."""
     move_dx, move_dy = _normalize(*_xy(move_vector))
     if abs(move_dx) <= 1e-9 and abs(move_dy) <= 1e-9:
         return 0.0
@@ -95,8 +98,10 @@ def strafe_score(
     to_enemy_x, to_enemy_y = _normalize(ex - sx, ey - sy)
     if abs(to_enemy_x) <= 1e-9 and abs(to_enemy_y) <= 1e-9:
         return 0.0
-    perpendicular = abs((move_dx * to_enemy_y) - (move_dy * to_enemy_x))
-    return float(weight) * perpendicular
+    signed_perpendicular = (move_dx * to_enemy_y) - (move_dy * to_enemy_x)
+    if int(direction) < 0:
+        signed_perpendicular = -signed_perpendicular
+    return float(weight) * signed_perpendicular
 
 
 def line_of_sight_score(

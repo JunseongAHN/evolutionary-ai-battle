@@ -47,6 +47,7 @@ class PygameCPCViewer:
         self._draw_arena(env_state, map_info, map_area)
         pygame.draw.rect(self.surface, (72, 78, 92), map_rect(map_info, map_area, self.padding), width=2)
         self._draw_obstacles(env_state, map_info, map_area)
+        self._draw_goal(env_state, map_info, map_area)
         self._draw_projectiles(env_state, map_info, map_area)
         self._draw_agents(env_state, map_info, map_area, step_record)
         self._draw_panel(env_state, step_record)
@@ -143,6 +144,31 @@ class PygameCPCViewer:
                     label = self.small_font.render(status, True, colors.FIRE if status == "EXACT AIM" else colors.WARNING)
                     self.surface.blit(label, (center[0] - label.get_width() // 2, center[1] - 45))
 
+    def _draw_goal(
+        self,
+        env_state: Mapping[str, Any],
+        map_info: Mapping[str, Any],
+        map_area: tuple[int, int],
+    ) -> None:
+        goal = env_state.get("goal", {})
+        position = goal.get("position") if isinstance(goal, Mapping) else None
+        if not goal or not goal.get("enabled") or position is None:
+            return
+        if isinstance(position, (list, tuple)):
+            position = {"x": position[0], "y": position[1]}
+        center = world_to_screen(position, map_info, map_area, self.padding)
+        radius = max(
+            4,
+            world_radius_to_screen(float(goal.get("radius", 0.0)), map_info, map_area, self.padding),
+        )
+        overlay = self.pygame.Surface((radius * 2 + 4, radius * 2 + 4), self.pygame.SRCALPHA)
+        local_center = (radius + 2, radius + 2)
+        self.pygame.draw.circle(overlay, colors.GOAL_FILL, local_center, radius)
+        self.surface.blit(overlay, (center[0] - radius - 2, center[1] - radius - 2))
+        self.pygame.draw.circle(self.surface, colors.GOAL, center, radius, width=2)
+        self.pygame.draw.line(self.surface, colors.GOAL, (center[0] - 7, center[1]), (center[0] + 7, center[1]), width=2)
+        self.pygame.draw.line(self.surface, colors.GOAL, (center[0], center[1] - 7), (center[0], center[1] + 7), width=2)
+
     def _draw_hp_bar(self, center: tuple[int, int], hp: float, y_offset: int) -> None:
         hp_width = 44
         ratio = max(0.0, min(1.0, hp / 100.0))
@@ -174,19 +200,6 @@ class PygameCPCViewer:
                     int(center[1] + float(direction.get("y", 0.0)) * 22),
                 )
                 self.pygame.draw.line(self.surface, colors.BULLET, center, direction_end, width=2)
-
-        bullet_events = _bullet_events(env_state)
-        for event in bullet_events:
-            if event.get("type") not in ("bullet_hit", "bullet_expired", "bullet_hit_obstacle"):
-                continue
-            position = event.get("pos")
-            if not position:
-                continue
-            center = world_to_screen(position, map_info, map_area, self.padding)
-            color = colors.FIRE if event.get("type") == "bullet_hit" else colors.MUTED
-            if event.get("type") == "bullet_hit_obstacle":
-                color = colors.OBSTACLE_EDGE
-            self.pygame.draw.circle(self.surface, color, center, 10, width=2)
 
     def _draw_panel(self, env_state: Mapping[str, Any], step_record: Mapping[str, Any] | None) -> None:
         left = self.width - self.panel_width
@@ -294,6 +307,9 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
     range_debug = info.get("range_debug", env_state.get("range_debug", {}))
     action = _decoded_action(step_record)
     weapon = env_state.get("weapon", {})
+    goal = env_state.get("goal", {})
+    events = info.get("events", env_state.get("events", []))
+    goal_position = goal.get("position") if isinstance(goal, Mapping) else None
     lines = [
         f"step: {env_state.get('step', env_state.get('step_count', '-'))}",
         f"reward: {float(rewards.get('agent', 0.0)):.3f}",
@@ -312,6 +328,10 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
         f"range: {float(range_debug.get('distance_to_enemy', 0.0)):.1f}",
         f"range ok: {bool(range_debug.get('in_good_range', False))}",
         f"trade: {float(metrics.get('damage_trade_ratio', 0.0)):.3f}",
+        f"goal: {_format_debug_position(goal_position)}",
+        f"goal dist: {_format_optional_number(goal.get('distance') if isinstance(goal, Mapping) else None)}",
+        f"goal count: {int(goal.get('reached_count', 0)) if isinstance(goal, Mapping) else 0}",
+        f"events: {','.join(str(event.get('type')) for event in events[-3:] if isinstance(event, Mapping)) or '-'}",
     ]
     manual_step = env_state.get("manual_step", {})
     if manual_step:
@@ -319,6 +339,21 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
         lines.append(f"action: {manual_step.get('current_action', '-')}")
         for control_line in manual_step.get("controls", []):
             lines.append(str(control_line))
+    tactical_debug = env_state.get("tactical_debug", {})
+    if tactical_debug:
+        lines.extend(
+            [
+                "",
+                "tactical debug",
+                f"tactical_mode: {tactical_debug.get('tactical_mode', '-')}",
+                f"target_cell: {tactical_debug.get('target_cell', '-')}",
+                f"next_cell: {tactical_debug.get('next_cell', '-')}",
+                f"move_bin: {tactical_debug.get('move_bin', '-')}",
+                f"aim_dir: ({float(tactical_debug.get('aim_dir_x', 0.0)):.2f}, "
+                f"{float(tactical_debug.get('aim_dir_y', 0.0)):.2f})",
+                f"fire: {tactical_debug.get('fire', '-')}",
+            ]
+        )
     lines.extend(["", "reward components"])
     for key, value in list(components.items())[:8]:
         lines.append(f"{key}: {float(value):.3f}")
@@ -327,6 +362,18 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
         if key in metrics:
             lines.append(f"{key}: {float(metrics[key]):.3f}")
     return lines
+
+
+def _format_debug_position(position: Any) -> str:
+    if isinstance(position, Mapping):
+        return f"({float(position.get('x', 0.0)):.1f},{float(position.get('y', 0.0)):.1f})"
+    if isinstance(position, (list, tuple)) and len(position) >= 2:
+        return f"({float(position[0]):.1f},{float(position[1]):.1f})"
+    return "-"
+
+
+def _format_optional_number(value: Any) -> str:
+    return "-" if value is None else f"{float(value):.1f}"
 
 
 def _aim_status(
