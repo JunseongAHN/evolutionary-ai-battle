@@ -9,7 +9,15 @@ def select_combat_profile(
     tactical_mode: str,
     config: BaselineConfig,
 ) -> tuple[str, dict]:
-    del ctx, state, config
+    del ctx, state
+    configured_profile = str(config.combat_movement_profile or "default").strip().lower()
+    if configured_profile == "poke_out":
+        return "poke_out", {
+            "combat_profile": "poke_out",
+            "combat_movement_profile": "poke_out",
+            "reason": "configured_combat_movement_profile",
+        }
+
     profile = {
         "approach": "approach_outer_band",
         "outer_band": "strafe_outer_band",

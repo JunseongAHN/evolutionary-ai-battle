@@ -90,6 +90,14 @@ class HierarchicalBaselineAgent:
                 if movement_debug.get("dodge_lock_move_bin") is not None
                 else None
             ),
+            combat_stay_steps=max(
+                0, int(movement_debug.get("combat_stay_steps", 0))
+            ),
+            poke_state=movement_debug.get("poke_state"),
+            poke_state_age=max(0, int(movement_debug.get("poke_state_age", 0))),
+            poke_exit_lock_steps_remaining=max(
+                0, int(movement_debug.get("poke_exit_lock_steps_remaining", 0))
+            ),
         )
 
         debug = build_debug(
@@ -111,6 +119,10 @@ class HierarchicalBaselineAgent:
             "strafe_age": self.state.strafe_age,
             "dodge_lock_steps_remaining": self.state.dodge_lock_steps_remaining,
             "dodge_lock_move_bin": self.state.dodge_lock_move_bin,
+            "combat_stay_steps": self.state.combat_stay_steps,
+            "poke_state": self.state.poke_state,
+            "poke_state_age": self.state.poke_state_age,
+            "poke_exit_lock_steps_remaining": self.state.poke_exit_lock_steps_remaining,
         }
         return action, debug
 

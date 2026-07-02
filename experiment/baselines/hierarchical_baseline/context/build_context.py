@@ -45,15 +45,28 @@ def build_context(
         observation.get("cooldown_ready"),
         default=float(_mapping(world.get("weapon")).get("cooldown_remaining_steps", 0.0)) <= 0.0,
     )
-    incoming_bullet = _find_incoming_bullet(
+    incoming_bullets = _find_incoming_bullets(
         bullets,
         player_pos,
-        max_cross_track=config.bullet_threat_cross_track,
+        max_cross_track=(
+            config.bullet_threat_cross_track
+            + config.move_step_distance * config.bullet_prediction_horizon_steps
+        ),
         default_bullet_radius=config.bullet_radius,
     )
+    incoming_bullet = incoming_bullets[0] if incoming_bullets else None
     map_info = _mapping(world.get("map"))
     player_info = _mapping(world.get("player"))
     player_agent = _mapping(_mapping(world.get("agents")).get("self"))
+    last_enemy_spawn = next(
+        (
+            event
+            for event in reversed(events)
+            if event.get("type") == "bullet_spawned"
+            and event.get("owner_id") == "enemy"
+        ),
+        {},
+    )
     context = AgentContext(
         player_pos=player_pos,
         player_hp=player_hp,
@@ -87,6 +100,8 @@ def build_context(
             _number(player_info.get("radius"), player_agent.get("radius"))
             or config.player_radius
         ),
+        incoming_bullets=tuple(deepcopy(incoming_bullets)),
+        env_dt=float(_number(world.get("dt")) or 1.0),
     )
     return context, {
         "player_pos": list(player_pos),
@@ -110,8 +125,20 @@ def build_context(
             else None
         ),
         "incoming_bullet_radius": context.incoming_bullet_radius,
+        "incoming_bullet_count": len(context.incoming_bullets),
         "map_size": [context.map_width, context.map_height],
         "player_radius": context.player_radius,
+        "env_dt": context.env_dt,
+        "enemy_aim_noise_deg": float(
+            _number(
+                world.get("enemy_aim_noise_deg"),
+                _mapping(world.get("combat")).get("enemy_aim_noise_deg"),
+            )
+            or 0.0
+        ),
+        "applied_enemy_aim_noise_rad": _number(
+            last_enemy_spawn.get("applied_enemy_aim_noise_rad")
+        ),
         "event_types": [event.get("type", event.get("event_type")) for event in events],
     }
 
@@ -209,13 +236,13 @@ def _extract_bullets(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [dict(bullet) for bullet in bullets if isinstance(bullet, Mapping)]
 
 
-def _find_incoming_bullet(
+def _find_incoming_bullets(
     bullets: list[dict[str, Any]],
     player_pos: tuple[float, float],
     *,
     max_cross_track: float,
     default_bullet_radius: float,
-) -> dict[str, Any] | None:
+) -> list[dict[str, Any]]:
     threats: list[tuple[float, float, str, dict[str, Any]]] = []
     for bullet in bullets:
         if (
@@ -242,6 +269,7 @@ def _find_incoming_bullet(
         if along_track <= 0.0 or cross_track > max(0.0, float(max_cross_track)):
             continue
         parsed = {
+            "bullet_id": str(bullet.get("bullet_id", "")),
             "position": position,
             "velocity": velocity,
             "radius": float(_number(bullet.get("radius")) or default_bullet_radius),
@@ -256,7 +284,7 @@ def _find_incoming_bullet(
                 parsed,
             )
         )
-    return min(threats, key=lambda item: item[:3])[3] if threats else None
+    return [item[3] for item in sorted(threats, key=lambda item: item[:3])]
 
 
 def _extract_events(obs: Mapping[str, Any], snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:

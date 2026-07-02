@@ -139,6 +139,7 @@ class CPCEnv:
         use_zone_reward: bool = False,
         enemy_move: bool = True,
         enemy_fire: bool = True,
+        enemy_aim_noise_deg: float = 0.0,
         stationary_target_mode: bool = False,
         enemy_spawn_distance_min: float | None = None,
         enemy_spawn_distance_max: float | None = None,
@@ -162,6 +163,7 @@ class CPCEnv:
         self.use_zone_reward = bool(use_zone_reward)
         self.enemy_move = bool(enemy_move)
         self.enemy_fire = bool(enemy_fire)
+        self.enemy_aim_noise_deg = max(0.0, float(enemy_aim_noise_deg))
         self.stationary_target_mode = bool(stationary_target_mode)
         self.enemy_spawn_distance_min = (
             float(enemy_spawn_distance_min) if enemy_spawn_distance_min is not None else None
@@ -280,6 +282,7 @@ class CPCEnv:
             self.enemy_max_hp = float(enemy.hp)
             self.enemy_move_speed = float(enemy.move_speed)
             self.enemy_behavior = enemy.behavior
+            self.enemy_aim_noise_deg = max(0.0, float(enemy.enemy_aim_noise_deg))
             self.enemy_move = enemy.behavior.strip().lower() not in {"stationary", "none", "passive"}
 
         self.obstacles = [
@@ -655,6 +658,7 @@ class CPCEnv:
                 "fire_alignment": self.fire_alignment,
                 "projectile_speed": self.projectile_speed,
                 "projectile_radius": self.projectile_radius,
+                "enemy_aim_noise_deg": float(self.enemy_aim_noise_deg),
             },
             "weapon": deepcopy(self.weapon),
             "state": deepcopy(self.state),
@@ -1292,6 +1296,19 @@ class CPCEnv:
         if abs(direction["x"]) <= 1e-6 and abs(direction["y"]) <= 1e-6:
             return damage_taken, events
 
+        applied_noise_rad = 0.0
+        if self.enemy_aim_noise_deg > 0.0:
+            max_noise_rad = math.radians(self.enemy_aim_noise_deg)
+            applied_noise_rad = self.rng.uniform(-max_noise_rad, max_noise_rad)
+            cosine = math.cos(applied_noise_rad)
+            sine = math.sin(applied_noise_rad)
+            direction = normalize_vec(
+                {
+                    "x": direction["x"] * cosine - direction["y"] * sine,
+                    "y": direction["x"] * sine + direction["y"] * cosine,
+                }
+            )
+
         bullet = self._spawn_projectile(
             owner_id="enemy",
             position=self.state["enemy_pos"],
@@ -1305,6 +1322,8 @@ class CPCEnv:
                 "bullet_id": bullet["bullet_id"],
                 "owner_id": bullet["owner_id"],
                 "pos": deepcopy(bullet["pos"]),
+                "enemy_aim_noise_deg": float(self.enemy_aim_noise_deg),
+                "applied_enemy_aim_noise_rad": float(applied_noise_rad),
             }
         )
         return damage_taken, events

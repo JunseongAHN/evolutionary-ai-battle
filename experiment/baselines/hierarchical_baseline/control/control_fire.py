@@ -31,7 +31,21 @@ def build_fire_status(
         and aim_error <= config.fire_aim_error_threshold
     )
     los_ok = bool(live_combat_target and ctx.line_of_sight)
-    can_fire_now = bool(fire_ready and target_in_range and aim_ok and los_ok)
+    poke_edge_fire = bool(
+        str(config.combat_movement_profile or "").strip().lower() == "poke_out"
+        and fire_ready
+        and not target_in_range
+        and ctx.enemy_dist is not None
+        and ctx.enemy_dist <= ctx.weapon_range + max(0.0, float(config.move_step_distance))
+        and aim_ok
+        and los_ok
+    )
+    can_fire_now = bool(
+        fire_ready
+        and (target_in_range or poke_edge_fire)
+        and aim_ok
+        and los_ok
+    )
 
     if local_plan.intent != "COMBAT":
         fire_reason = "not_combat_intent"
@@ -39,7 +53,7 @@ def build_fire_status(
         fire_reason = "player_dead"
     elif enemy is None or not enemy.alive:
         fire_reason = "no_live_enemy"
-    elif not target_in_range:
+    elif not target_in_range and not poke_edge_fire:
         fire_reason = "target_out_of_range"
     elif not los_ok:
         fire_reason = "line_of_sight_blocked"
@@ -47,6 +61,8 @@ def build_fire_status(
         fire_reason = "aim_not_aligned"
     elif not fire_ready:
         fire_reason = "cooldown_not_ready"
+    elif poke_edge_fire:
+        fire_reason = "poke_edge_fire"
     else:
         fire_reason = "all_conditions_met"
 
@@ -57,6 +73,7 @@ def build_fire_status(
         "los_ok": los_ok,
         "fire_reason": fire_reason,
         "can_fire_now": can_fire_now,
+        "poke_edge_fire": poke_edge_fire,
         "aim_error": aim_error,
     }
 

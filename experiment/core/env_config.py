@@ -38,6 +38,7 @@ class EnemyConfig:
     hp: float
     move_speed: float
     behavior: str = "stationary"
+    enemy_aim_noise_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,7 @@ def default_env_config() -> EnvConfig:
                 hp=100.0,
                 move_speed=18.0,
                 behavior="chase",
+                enemy_aim_noise_deg=0.0,
             )
         ],
         obstacles=[],
@@ -228,6 +230,11 @@ def _enemy_configs(data: Any, defaults: list[EnemyConfig]) -> list[EnemyConfig]:
                 hp=_float(item_data, "hp", fallback.hp),
                 move_speed=_float(item_data, "move_speed", fallback.move_speed),
                 behavior=str(item_data.get("behavior", fallback.behavior)),
+                enemy_aim_noise_deg=_float(
+                    item_data,
+                    "enemy_aim_noise_deg",
+                    fallback.enemy_aim_noise_deg,
+                ),
             )
         )
     return enemies

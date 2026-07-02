@@ -32,8 +32,16 @@ class BaselineConfig:
     bullet_threat_cross_track: float = 24.0
     bullet_safety_margin: float = 30.0
     bullet_radius: float = 12.0
+    bullet_prediction_horizon_steps: int = 3
     move_step_distance: float = 20.0
     player_radius: float = 12.0
+    combat_movement_profile: str = "default"
+    poke_enter_ratio: float = 0.98
+    poke_exit_ratio: float = 1.15
+    poke_exit_margin: float = 40.0
+    poke_exit_lock_steps: int = 4
+    poke_fire_while_exiting: bool = True
+    poke_exit_uses_bullet_velocity: bool = True
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,8 @@ class AgentContext:
     map_width: float | None = None
     map_height: float | None = None
     player_radius: float = 12.0
+    incoming_bullets: tuple[dict[str, Any], ...] = ()
+    env_dt: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,10 @@ class AgentState:
     strafe_age: int = 0
     dodge_lock_steps_remaining: int = 0
     dodge_lock_move_bin: int | None = None
+    combat_stay_steps: int = 0
+    poke_state: str | None = None
+    poke_state_age: int = 0
+    poke_exit_lock_steps_remaining: int = 0
 
 
 def default_config() -> BaselineConfig:

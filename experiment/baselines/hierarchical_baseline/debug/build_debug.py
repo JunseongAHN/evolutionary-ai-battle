@@ -38,6 +38,7 @@ def build_debug(
         "fire_ready": bool(fire_status.get("fire_ready", False)),
         "target_in_range": bool(fire_status.get("target_in_range", False)),
         "can_fire_now": bool(fire_status.get("can_fire_now", False)),
+        "combat_movement_profile": movement_debug.get("combat_movement_profile"),
         "range_policy_reason": movement_debug.get("range_policy_reason"),
         "hold_movement_policy": movement_debug.get("hold_movement_policy"),
         "hold_predicted_in_range": movement_debug.get("hold_predicted_in_range"),
@@ -47,6 +48,47 @@ def build_debug(
         ),
         "reset_soft_backoff_active": bool(
             movement_debug.get("reset_soft_backoff_active", False)
+        ),
+        "micro_intent": movement_debug.get("micro_intent"),
+        "poke_state": movement_debug.get("poke_state"),
+        "poke_state_age": movement_debug.get("poke_state_age", 0),
+        "poke_exit_lock_steps_remaining": movement_debug.get(
+            "poke_exit_lock_steps_remaining", 0
+        ),
+        "poke_exit_vector": movement_debug.get("poke_exit_vector"),
+        "poke_exit_move_bin": movement_debug.get("poke_exit_move_bin"),
+        "poke_exit_reason": movement_debug.get("poke_exit_reason"),
+        "primary_enemy_bullet_id": movement_debug.get("primary_enemy_bullet_id"),
+        "primary_enemy_bullet_velocity": movement_debug.get(
+            "primary_enemy_bullet_velocity"
+        ),
+        "dist_to_enemy": movement_debug.get("dist_to_enemy"),
+        "poke_enter_ratio": movement_debug.get("poke_enter_ratio"),
+        "poke_exit_ratio": movement_debug.get("poke_exit_ratio"),
+        "kiting_policy_reason": movement_debug.get("kiting_policy_reason"),
+        "stay_allowed": bool(movement_debug.get("stay_allowed", False)),
+        "stay_blocked_reason": movement_debug.get("stay_blocked_reason"),
+        "reset_dodge_override_used": bool(
+            movement_debug.get("reset_dodge_override_used", False)
+        ),
+        "incoming_bullet_danger": bool(
+            movement_debug.get("incoming_bullet_danger", False)
+        ),
+        "selected_escape_move": movement_debug.get("selected_escape_move"),
+        "selected_escape_type": movement_debug.get("selected_escape_type"),
+        "selected_escape_predicted_min_distance": movement_debug.get(
+            "selected_escape_predicted_min_distance"
+        ),
+        "perpendicular_rejected_reason": movement_debug.get(
+            "perpendicular_rejected_reason"
+        ),
+        "diagonal_rejected_reason": movement_debug.get("diagonal_rejected_reason"),
+        "backoff_rejected_reason": movement_debug.get("backoff_rejected_reason"),
+        "predicted_min_bullet_distance_for_stay": movement_debug.get(
+            "predicted_min_bullet_distance_for_stay"
+        ),
+        "repeated_line_break_used": bool(
+            movement_debug.get("repeated_line_break_used", False)
         ),
         "predicted_next_dist_ratio": movement_debug.get("predicted_next_dist_ratio"),
         "events": context_debug.get("event_types", []),
@@ -96,6 +138,10 @@ def build_debug(
         ),
         "range_hysteresis_locked": bool(local_debug.get("range_hysteresis_locked", False)),
         "combat_exit_blocked_reason": intent_debug.get("combat_exit_blocked_reason"),
+        "enemy_aim_noise_deg": context_debug.get("enemy_aim_noise_deg", 0.0),
+        "applied_enemy_aim_noise_rad": context_debug.get(
+            "applied_enemy_aim_noise_rad"
+        ),
     }
 
 

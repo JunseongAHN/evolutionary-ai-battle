@@ -299,6 +299,116 @@ def test_fire_ready_safely_in_range_strafes_while_firing():
     assert debug_data["predicted_next_dist_ratio"] <= 0.98
 
 
+def test_poke_out_outside_range_enters_without_firing():
+    config = BaselineConfig(combat_movement_profile="poke_out")
+    ctx = _context(goal=None, enemy=(400.0, 100.0))
+    plan = _poke_plan(ctx)
+
+    control_value, control_debug = controller(ctx, AgentState(), plan, config)
+    debug_data = control_debug["movement"]
+
+    assert control_value.move_bin == 4
+    assert control_value.fire == 0
+    assert debug_data["combat_movement_profile"] == "poke_out"
+    assert debug_data["micro_intent"] == "POKE_ENTER_RANGE"
+    assert debug_data["movement_policy_reason"] == "poke_enter_range"
+
+
+def test_poke_out_fires_in_range_and_starts_exit():
+    config = BaselineConfig(combat_movement_profile="poke_out")
+    ctx = _context(goal=None, enemy=(345.0, 100.0))
+    plan = _poke_plan(ctx)
+
+    control_value, control_debug = controller(ctx, AgentState(), plan, config)
+    debug_data = control_debug["movement"]
+
+    assert control_value.fire == 1
+    assert control_value.move_bin == 3
+    assert debug_data["micro_intent"] == "POKE_FIRE"
+    assert debug_data["movement_policy_reason"] == "poke_fire_in_range_start_exit"
+    assert debug_data["poke_state"] == "POKE_EXIT_BULLET_DIR"
+    assert debug_data["poke_exit_lock_steps_remaining"] == config.poke_exit_lock_steps
+
+
+def test_poke_out_enemy_bullet_exits_along_bullet_velocity():
+    config = BaselineConfig(combat_movement_profile="poke_out")
+    ctx = replace(
+        _context(goal=None, enemy=(345.0, 100.0)),
+        cooldown_ready=False,
+        incoming_bullet=True,
+        incoming_bullet_position=(100.0, 0.0),
+        incoming_bullet_velocity=(0.0, 100.0),
+    )
+    plan = _poke_plan(ctx)
+
+    move_bin, debug_data = control_movement(ctx, AgentState(), plan, config)
+    vx, vy = _test_move_vector(move_bin)
+
+    assert move_bin != 0
+    assert vx * 0.0 + vy * 1.0 > 0.0
+    assert debug_data["micro_intent"] == "POKE_EXIT_BULLET_DIR"
+    assert debug_data["poke_exit_reason"] == "enemy_bullet_velocity"
+    assert debug_data["movement_policy_reason"] == "poke_exit_along_bullet_dir"
+
+
+def test_poke_out_exit_can_leave_fire_range():
+    config = BaselineConfig(combat_movement_profile="poke_out")
+    ctx = replace(_context(goal=None, enemy=(358.0, 100.0)), cooldown_ready=False)
+    plan = _poke_plan(ctx)
+    state = AgentState(
+        poke_state="POKE_EXIT_BULLET_DIR",
+        poke_exit_lock_steps_remaining=2,
+    )
+
+    move_bin, debug_data = control_movement(ctx, state, plan, config)
+
+    assert move_bin == 3
+    assert debug_data["micro_intent"] == "POKE_EXIT_BULLET_DIR"
+    assert debug_data["predicted_next_dist_ratio"] > 1.0
+    assert debug_data["movement_policy_reason"] == "poke_exit_away_from_enemy"
+
+
+def test_poke_out_exit_does_not_stay_when_positive_exit_move_is_feasible():
+    config = BaselineConfig(combat_movement_profile="poke_out")
+    cells = [[[0.0] for _ in range(3)] for _ in range(3)]
+    cells[1][0][0] = 1.0
+    ctx = replace(
+        _context(goal=None, enemy=(345.0, 100.0)),
+        cooldown_ready=False,
+        local_grid={"cells": cells, "center_cell": [1, 1], "channel_names": ["obstacle"]},
+    )
+    plan = _poke_plan(ctx)
+    state = AgentState(
+        poke_state="POKE_EXIT_BULLET_DIR",
+        poke_exit_lock_steps_remaining=2,
+    )
+
+    move_bin, debug_data = control_movement(ctx, state, plan, config)
+    vx, vy = _test_move_vector(move_bin)
+    exit_x, exit_y = debug_data["poke_exit_vector"]
+
+    assert move_bin != 0
+    assert vx * exit_x + vy * exit_y > 0.0
+    assert debug_data["poke_exit_move_bin"] == move_bin
+
+
+def test_poke_out_returns_to_enter_range_after_exit_threshold():
+    config = BaselineConfig(combat_movement_profile="poke_out")
+    ctx = _context(goal=None, enemy=(410.0, 100.0))
+    plan = _poke_plan(ctx)
+    state = AgentState(
+        poke_state="POKE_EXIT_BULLET_DIR",
+        poke_exit_lock_steps_remaining=2,
+    )
+
+    move_bin, debug_data = control_movement(ctx, state, plan, config)
+
+    assert move_bin == 4
+    assert debug_data["micro_intent"] == "POKE_ENTER_RANGE"
+    assert debug_data["poke_state"] == "POKE_ENTER_RANGE"
+    assert debug_data["poke_exit_lock_steps_remaining"] == 0
+
+
 def test_hold_stops_at_range_edge_when_strafe_would_leave_margin():
     ctx = _context(goal=None, enemy=(358.0, 100.0))
     plan = LocalPlan("COMBAT", "outer_band", "strafe_outer_band", ctx.player_pos, None, None, (), 0)
@@ -375,10 +485,12 @@ def test_cooldown_out_of_range_holds_instead_of_drifting_farther():
 
     move_bin, debug_data = control_movement(ctx, AgentState(strafe_direction=1), plan, BaselineConfig())
 
-    assert move_bin == 0
-    assert debug_data["outer_band_strafe_active"] is False
+    assert move_bin != 0
+    assert move_bin != 4
+    assert debug_data["outer_band_strafe_active"] is True
     assert debug_data["fire_window_state"] == "RESET"
-    assert debug_data["movement_policy_reason"] == "fire_window_reset_hold_out_of_range"
+    assert debug_data["movement_policy_reason"] == "fire_window_reset_kite_out_of_range"
+    assert debug_data["kiting_policy_reason"] == "cooldown_line_break"
     assert debug_data["retreat_diagonal_allowed"] is False
 
 
@@ -396,12 +508,14 @@ def test_fire_hold_priority_keeps_shot_stable_when_bullet_is_present():
     control_value, control_debug = controller(ctx, state, plan, BaselineConfig())
     debug_data = control_debug["movement"]
 
-    assert control_value.move_bin == 2
+    assert control_value.move_bin != 0
     assert control_value.fire == 1
     assert debug_data["fire_window_state"] == "HOLD"
     assert debug_data["bullet_strafe_lock_active"] is True
     assert debug_data["incoming_bullet_stop_blocked"] is True
-    assert debug_data["hold_movement_policy"] == "incoming_bullet_perpendicular"
+    assert debug_data["hold_movement_policy"] == "incoming_bullet_safe_escape"
+    assert debug_data["hold_predicted_in_range"] is True
+    assert debug_data["selected_escape_move"] is not None
 
 
 def test_hold_bullet_strafe_lock_keeps_perpendicular_move():
@@ -471,11 +585,11 @@ def test_fire_window_too_close_retreat_has_highest_priority():
     move_bin, debug_data = control_movement(ctx, AgentState(), plan, BaselineConfig())
 
     assert move_bin == 3
-    assert debug_data["retreat_diagonal_allowed"] is True
-    assert debug_data["selected_dodge_move"]["name"] == "pure_retreat"
-    assert debug_data["bullet_strafe_lock_active"] is False
+    assert debug_data["incoming_bullet_danger"] is True
+    assert debug_data["selected_escape_move"] is not None
+    assert debug_data["bullet_strafe_lock_active"] is True
     assert debug_data["fire_window_state"] == "TOO_CLOSE"
-    assert debug_data["movement_policy_reason"] == "fire_window_too_close_retreat"
+    assert debug_data["movement_policy_reason"] == "fire_window_too_close_bullet_escape"
 
 
 def test_fire_ready_out_of_range_enters_instead_of_strafing():
@@ -502,12 +616,12 @@ def test_cooldown_out_of_range_resets_without_approaching():
 
     move_bin, debug_data = control_movement(ctx, AgentState(strafe_direction=1), plan, BaselineConfig())
 
-    assert move_bin == 0
+    assert move_bin != 0
     assert move_bin != 4
     assert debug_data["fire_window_state"] == "RESET"
     assert debug_data["fire_ready"] is False
     assert debug_data["target_in_range"] is False
-    assert debug_data["movement_policy_reason"] == "fire_window_reset_hold_out_of_range"
+    assert debug_data["movement_policy_reason"] == "fire_window_reset_kite_out_of_range"
 
 
 def test_incoming_bullet_uses_open_emergency_move_when_tangents_are_blocked():
@@ -526,9 +640,11 @@ def test_incoming_bullet_uses_open_emergency_move_when_tangents_are_blocked():
 
     move_bin, debug_data = control_movement(ctx, AgentState(), plan, BaselineConfig())
 
-    assert move_bin == 4
+    assert move_bin != 0
     assert debug_data["incoming_bullet_stop_blocked"] is True
-    assert debug_data["movement_policy_reason"].endswith("incoming_emergency")
+    assert debug_data["incoming_bullet_danger"] is True
+    assert debug_data["reset_dodge_override_used"] is True
+    assert debug_data["selected_escape_move"] is not None
 
 
 def test_incoming_bullet_can_stop_only_when_every_move_is_blocked():
@@ -550,7 +666,134 @@ def test_incoming_bullet_can_stop_only_when_every_move_is_blocked():
     move_bin, debug_data = control_movement(ctx, AgentState(), plan, BaselineConfig())
 
     assert move_bin == 0
-    assert debug_data["incoming_bullet_stop_blocked"] is False
+    assert debug_data["incoming_bullet_stop_blocked"] is True
+    assert debug_data["incoming_bullet_danger"] is True
+    assert debug_data["selected_escape_move"] is None
+
+
+def test_reset_bullet_danger_overrides_backoff_with_line_break():
+    ctx = replace(
+        _context(goal=None, enemy=(100.0, 345.0)),
+        cooldown_ready=False,
+        incoming_bullet=True,
+        incoming_bullet_position=(100.0, 0.0),
+        incoming_bullet_velocity=(0.0, 100.0),
+        incoming_bullet_radius=12.0,
+    )
+    plan = LocalPlan("COMBAT", "outer_band", "strafe_outer_band", ctx.player_pos, None, None, (), 0)
+
+    move_bin, debug_data = control_movement(ctx, AgentState(), plan, BaselineConfig())
+
+    assert debug_data["fire_window_state"] == "RESET"
+    assert debug_data["incoming_bullet_danger"] is True
+    assert debug_data["reset_dodge_override_used"] is True
+    assert debug_data["bullet_dodge_active"] is True
+    assert debug_data["micro_intent"] == "BULLET_ESCAPE"
+    assert move_bin in {3, 4, 5, 6, 7, 8}
+    assert move_bin != 1
+    assert debug_data["selected_escape_move"] is not None
+    assert debug_data["kiting_policy_reason"] in {
+        "perpendicular_safe",
+        "perpendicular_rejected_diagonal_safe",
+        "fallback_soft_backoff",
+        "least_bad_escape",
+    }
+
+
+def test_predictive_escape_accepts_perpendicular_only_when_safe():
+    ctx = replace(
+        _context(goal=None, enemy=(345.0, 100.0)),
+        cooldown_ready=False,
+        incoming_bullet=True,
+        incoming_bullet_position=(100.0, 0.0),
+        incoming_bullet_velocity=(0.0, 50.0),
+        incoming_bullet_radius=4.0,
+    )
+    plan = LocalPlan("COMBAT", "outer_band", "strafe_outer_band", ctx.player_pos, None, None, (), 0)
+
+    move_bin, debug_data = control_movement(
+        ctx,
+        AgentState(),
+        plan,
+        BaselineConfig(bullet_safety_margin=0.0),
+    )
+
+    assert move_bin != 0
+    assert debug_data["selected_escape_type"] == "perpendicular"
+    assert debug_data["kiting_policy_reason"] == "perpendicular_safe"
+    assert debug_data["selected_escape_move"]["bullet_safe"] is True
+    assert debug_data["selected_escape_predicted_min_distance"] >= 16.0
+
+
+def test_predictive_escape_rejects_unsafe_perpendicular_for_diagonal():
+    bullets = (
+        {
+            "bullet_id": "b0",
+            "position": (18.63317590467379, -60.084679890078576),
+            "velocity": (76.44311376173255, -23.589200037534436),
+            "radius": 4.0,
+        },
+        {
+            "bullet_id": "b1",
+            "position": (131.65016243853387, -79.25962559457464),
+            "velocity": (-16.49535101057295, 98.63013431521823),
+            "radius": 4.0,
+        },
+    )
+    ctx = replace(
+        _context(goal=None, enemy=(-145.0, 100.0)),
+        cooldown_ready=False,
+        incoming_bullet=True,
+        incoming_bullet_position=bullets[0]["position"],
+        incoming_bullet_velocity=bullets[0]["velocity"],
+        incoming_bullet_radius=4.0,
+        incoming_bullets=bullets,
+    )
+    plan = LocalPlan("COMBAT", "outer_band", "strafe_outer_band", ctx.player_pos, None, None, (), 0)
+
+    move_bin, debug_data = control_movement(
+        ctx,
+        AgentState(),
+        plan,
+        BaselineConfig(bullet_safety_margin=0.0),
+    )
+
+    assert move_bin != 0
+    assert debug_data["perpendicular_rejected_reason"].startswith(
+        "predicted_clearance_below_margin"
+    )
+    assert debug_data["selected_escape_type"] == "diagonal_away"
+    assert debug_data["kiting_policy_reason"] == "perpendicular_rejected_diagonal_safe"
+    assert debug_data["selected_escape_move"]["bullet_safe"] is True
+
+
+def test_repeated_hold_uses_range_preserving_line_break():
+    ctx = _context(goal=None, enemy=(358.0, 100.0))
+    plan = LocalPlan("COMBAT", "outer_band", "strafe_outer_band", ctx.player_pos, None, None, (), 0)
+
+    move_bin, debug_data = control_movement(
+        ctx,
+        AgentState(combat_stay_steps=1),
+        plan,
+        BaselineConfig(),
+    )
+
+    assert move_bin != 0
+    assert debug_data["stay_allowed"] is False
+    assert debug_data["stay_blocked_reason"] == "repeated_stay_limit"
+    assert debug_data["repeated_line_break_used"] is True
+    assert debug_data["predicted_next_dist_ratio"] <= 0.98
+
+
+def test_non_combat_movement_is_unchanged_by_kiting_policy():
+    ctx = _context(goal=(500.0, 500.0), enemy=None)
+    plan = LocalPlan("GLOBAL_NAV", None, None, ctx.goal_pos, None, None, (), 8)
+
+    move_bin, debug_data = control_movement(ctx, AgentState(), plan, BaselineConfig())
+
+    assert move_bin == 8
+    assert debug_data["micro_intent"] == "GLOBAL_NAV"
+    assert debug_data["kiting_policy_reason"] == "non_combat_local_plan"
 
 
 def test_cooldown_inside_range_backs_off_slightly():
@@ -562,10 +805,11 @@ def test_cooldown_inside_range_backs_off_slightly():
 
     move_bin, debug_data = control_movement(ctx, AgentState(), plan, BaselineConfig())
 
-    assert move_bin == 3
+    assert move_bin != 0
     assert debug_data["fire_window_state"] == "RESET"
-    assert debug_data["movement_policy_reason"] == "fire_window_reset_backoff"
-    assert debug_data["reset_soft_backoff_active"] is True
+    assert debug_data["movement_policy_reason"] == "fire_window_reset_kite"
+    assert debug_data["reset_soft_backoff_active"] is False
+    assert debug_data["kiting_policy_reason"] == "cooldown_perpendicular_or_diagonal"
 
 
 def test_agent_act_applies_dodge_lock_state_delta():
@@ -591,7 +835,10 @@ def test_agent_act_applies_dodge_lock_state_delta():
 
     assert debug_data["incoming_bullet_stop_blocked"] is True
     assert debug_data["fire_window_state"] == "RESET"
-    assert debug_data["reset_soft_backoff_active"] is True
+    assert debug_data["incoming_bullet_danger"] is True
+    assert debug_data["reset_dodge_override_used"] is True
+    assert debug_data["bullet_dodge_active"] is True
+    assert debug_data["reset_soft_backoff_active"] is False
     assert debug_data["move_bin"] != 0
 
 
@@ -785,6 +1032,20 @@ def test_hierarchical_debug_script_prints_required_trace_fields():
         "hold_stop_used=",
         "incoming_bullet_stop_blocked=",
         "reset_soft_backoff_active=",
+        "micro_intent=",
+        "kiting_policy_reason=",
+        "stay_allowed=",
+        "stay_blocked_reason=",
+        "reset_dodge_override_used=",
+        "incoming_bullet_danger=",
+        "selected_escape_move=",
+        "selected_escape_type=",
+        "selected_escape_predicted_min_distance=",
+        "perpendicular_rejected_reason=",
+        "diagonal_rejected_reason=",
+        "backoff_rejected_reason=",
+        "predicted_min_bullet_distance_for_stay=",
+        "repeated_line_break_used=",
         "predicted_next_dist_ratio=",
         "events=",
         "mode_age=",
@@ -817,6 +1078,8 @@ def test_hierarchical_debug_script_prints_required_trace_fields():
         "enemy_opposite_component_used=",
         "range_hysteresis_locked=",
         "combat_exit_blocked_reason=",
+        "enemy_aim_noise_deg=",
+        "applied_enemy_aim_noise_rad=",
     ):
         assert field in result.stdout
 
@@ -855,7 +1118,10 @@ def test_goal_loop_combat_range_controller_smoke():
         if combat_started and enemy_alive and fire_window_state == "RESET":
             assert debug_data["fire_ready"] is False
             if debug_data["target_in_range"] or debug_data["context"].get("incoming_bullet"):
-                assert action["move_bin"] != 0
+                if action["move_bin"] == 0:
+                    assert debug_data["incoming_bullet_danger"] is True
+                    assert debug_data["selected_escape_move"] is None
+                    assert debug_data["dodge_blocked_reasons"]
         if combat_started and enemy_alive and fire_window_state == "TOO_CLOSE":
             assert action["move_bin"] != 0
         if action["fire"]:
@@ -874,6 +1140,27 @@ def test_goal_loop_combat_range_controller_smoke():
 
     assert combat_started is True
     assert combat_steps > 0
+
+
+def _poke_plan(ctx: AgentContext) -> LocalPlan:
+    return LocalPlan("COMBAT", "outer_band", "poke_out", ctx.player_pos, None, None, (), 0)
+
+
+def _test_move_vector(move_bin: int) -> tuple[float, float]:
+    vectors = {
+        0: (0.0, 0.0),
+        1: (0.0, -1.0),
+        2: (0.0, 1.0),
+        3: (-1.0, 0.0),
+        4: (1.0, 0.0),
+        5: (-1.0, -1.0),
+        6: (1.0, -1.0),
+        7: (-1.0, 1.0),
+        8: (1.0, 1.0),
+    }
+    dx, dy = vectors[move_bin]
+    length = (dx * dx + dy * dy) ** 0.5
+    return (0.0, 0.0) if length <= 1e-6 else (dx / length, dy / length)
 
 
 def _context(
