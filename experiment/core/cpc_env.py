@@ -955,13 +955,43 @@ class CPCEnv:
         length = max(math.hypot(dx, dy), 1e-6)
         start = dict(enemy)
         step_distance = min(float(self.enemy_move_speed), max(0.0, distance_to_self - self.player_radius - self.enemy_radius))
-        target_step = {
-            "x": self._clamp(enemy["x"] + (dx / length) * step_distance, 0.0, self.width),
-            "y": self._clamp(enemy["y"] + (dy / length) * step_distance, 0.0, self.height),
-        }
-        resolved = self._resolve_obstacle_blocked_move(start, target_step, self.enemy_radius)
+        resolved = self._resolve_enemy_move(
+            start,
+            direction=(dx / length, dy / length),
+            step_distance=step_distance,
+        )
         enemy["x"] = resolved["x"]
         enemy["y"] = resolved["y"]
+
+    def _resolve_enemy_move(
+        self,
+        start: Vec2,
+        *,
+        direction: tuple[float, float],
+        step_distance: float,
+    ) -> Vec2:
+        best_partial = dict(start)
+        best_distance = 0.0
+        for angle in (0.0, math.pi / 4.0, -math.pi / 4.0, math.pi / 2.0, -math.pi / 2.0):
+            cos_angle = math.cos(angle)
+            sin_angle = math.sin(angle)
+            move_x = direction[0] * cos_angle - direction[1] * sin_angle
+            move_y = direction[0] * sin_angle + direction[1] * cos_angle
+            target = {
+                "x": self._clamp(start["x"] + move_x * step_distance, 0.0, self.width),
+                "y": self._clamp(start["y"] + move_y * step_distance, 0.0, self.height),
+            }
+            requested_distance = self._distance(start, target)
+            if requested_distance <= 1e-6:
+                continue
+            resolved = self._resolve_obstacle_blocked_move(start, target, self.enemy_radius)
+            resolved_distance = self._distance(start, resolved)
+            if resolved_distance > best_distance:
+                best_partial = resolved
+                best_distance = resolved_distance
+            if resolved_distance >= requested_distance * 0.99:
+                return resolved
+        return best_partial
 
     def _try_spawn_bullet(self, decoded: dict[str, float]) -> tuple[bool, str | None, dict[str, Any] | None]:
         if int(decoded["fire"]) != 1:

@@ -154,8 +154,33 @@ def test_autoplay_goal_loop_config_loads():
     env = CPCEnv.from_config(config)
 
     assert config.goal.enabled is True
+    assert config.enemies[0].move_speed == 5.0
+    assert config.enemies[0].behavior == "pursue"
     assert env.goal_position == (680.0, 680.0)
     assert env.get_snapshot()["goal"]["enabled"] is True
+
+
+def test_pursuing_enemy_moves_around_obstacle():
+    obstacle = {"id": "center", "type": "circle", "x": 400.0, "y": 400.0, "radius": 80.0}
+    env = _goal_env(obstacles=[obstacle])
+    env.max_steps = 80
+    env.enemy_move = True
+    env.enemy_behavior = "pursue"
+    env.enemy_move_speed = 10.0
+    env.state["self_pos"] = {"x": 150.0, "y": 400.0}
+    env.state["enemy_pos"] = {"x": 650.0, "y": 400.0}
+    initial_distance = env._distance(env.state["self_pos"], env.state["enemy_pos"])
+
+    moved_off_direct_line = False
+    for _ in range(50):
+        env.step(STAY)
+        enemy = env.state["enemy_pos"]
+        obstacle_distance = math.hypot(enemy["x"] - obstacle["x"], enemy["y"] - obstacle["y"])
+        assert obstacle_distance >= obstacle["radius"] + env.enemy_radius - 1e-3
+        moved_off_direct_line = moved_off_direct_line or abs(enemy["y"] - 400.0) > 1.0
+
+    assert moved_off_direct_line is True
+    assert env._distance(env.state["self_pos"], env.state["enemy_pos"]) < initial_distance
 
 
 def test_manual_debug_defaults_to_visible_goal_scenario():
