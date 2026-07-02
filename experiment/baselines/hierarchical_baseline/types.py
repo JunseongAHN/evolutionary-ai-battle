@@ -108,6 +108,14 @@ class Control:
     fire: int
 
 
+@dataclass(frozen=True)
+class ExecutionDirective:
+    """Target and positioning contract supplied by a behavior layer."""
+
+    target_ref: dict[str, str]
+    anchor_position: tuple[float, float] | None
+
+
 @dataclass
 class AgentState:
     global_plan: GlobalPlan | None = None
@@ -146,6 +154,7 @@ __all__ = [
     "BaselineConfig",
     "Control",
     "EnemyInfo",
+    "ExecutionDirective",
     "GlobalPlan",
     "LocalPlan",
     "default_agent_state",

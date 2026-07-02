@@ -1570,6 +1570,44 @@ def _select_retreat_move(
                 "enemy_opposite_component": True,
             }, blocked
         blocked[name] = reasons
+
+    for name, tangent_direction in (
+        ("retreat_boundary_tangent", strafe_direction),
+        ("retreat_boundary_tangent_opposite", -strafe_direction),
+    ):
+        move_bin = _vector_to_move_bin(*_enemy_tangent(ctx, tangent_direction))
+        reasons = _candidate_blocked_reasons(ctx, move_bin, config)
+        if not reasons:
+            return {
+                "name": name,
+                "move_bin": move_bin,
+                "vector": list(_normalized_move_vector(move_bin)),
+                "feasible": True,
+                "enemy_opposite_component": False,
+            }, blocked
+        blocked[name] = reasons
+
+    feasible_escape_bins: list[int] = []
+    for move_bin in range(1, 9):
+        reasons = _candidate_blocked_reasons(ctx, move_bin, config)
+        if not reasons:
+            feasible_escape_bins.append(move_bin)
+    if feasible_escape_bins:
+        move_bin = min(
+            feasible_escape_bins,
+            key=lambda candidate: (
+                _normalized_move_vector(candidate)[0] * enemy_direction[0]
+                + _normalized_move_vector(candidate)[1] * enemy_direction[1],
+                candidate,
+            ),
+        )
+        return {
+            "name": "retreat_corner_escape",
+            "move_bin": move_bin,
+            "vector": list(_normalized_move_vector(move_bin)),
+            "feasible": True,
+            "enemy_opposite_component": False,
+        }, blocked
     return None, blocked
 
 

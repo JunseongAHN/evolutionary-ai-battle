@@ -18,13 +18,14 @@ def build_context(
     snapshot: Any,
     state: AgentState,
     config: BaselineConfig,
+    target_enemy_id: str | None = None,
 ) -> tuple[AgentContext, dict[str, Any]]:
     del state
     observation = dict(obs) if isinstance(obs, Mapping) else {}
     world = _snapshot(snapshot)
     player_pos, player_hp, player_alive = _extract_player(observation, world)
     goal_pos, goal_count = _extract_goal(observation, world)
-    nearest_enemy = _find_nearest_enemy(observation, world, player_pos)
+    nearest_enemy = _find_nearest_enemy(observation, world, player_pos, target_enemy_id)
     enemy_dist = (
         math.dist(player_pos, nearest_enemy.position)
         if nearest_enemy is not None and nearest_enemy.alive
@@ -171,6 +172,7 @@ def _find_nearest_enemy(
     obs: Mapping[str, Any],
     snapshot: Mapping[str, Any],
     player_pos: tuple[float, float],
+    target_enemy_id: str | None = None,
 ) -> EnemyInfo | None:
     candidates: list[EnemyInfo] = []
     for index, enemy in enumerate(snapshot.get("enemies", []) or []):
@@ -187,7 +189,11 @@ def _find_nearest_enemy(
     if obs_position is not None:
         hp = float(_number(obs.get("enemy_hp")) or 0.0)
         candidates.append(EnemyInfo("enemy", obs_position, hp, hp > 0.0))
-    alive = [enemy for enemy in candidates if enemy.alive]
+    alive = [
+        enemy
+        for enemy in candidates
+        if enemy.alive and (target_enemy_id is None or enemy.enemy_id == target_enemy_id)
+    ]
     if not alive:
         return None
     return min(alive, key=lambda enemy: (math.dist(player_pos, enemy.position), enemy.enemy_id))

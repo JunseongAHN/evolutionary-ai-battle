@@ -39,6 +39,7 @@ def test_goal_reached_event_emitted_when_player_enters_radius():
     _, _, done, info = env.step(STAY)
 
     assert [event["type"] for event in info["events"]] == ["goal_reached"]
+    assert info["events"][0]["actor_id"] == "self"
     assert info["events"][0]["goal_reached_count"] == 1
     assert env.goal_reached_count == 1
     assert done is False
@@ -54,6 +55,20 @@ def test_goal_respawns_after_reach_when_enabled():
     assert env.goal_position is not None
     assert env.goal_position != previous_goal
     assert [event["type"] for event in info["events"]] == ["goal_reached", "goal_respawned"]
+
+
+def test_goal_respawns_when_ally_reaches_it():
+    env = _goal_env(respawn_on_reach=True)
+    previous_goal = env.goal_position
+    env.state["ally_pos"] = _goal_position_dict(env)
+
+    _, _, _, info = env.step(STAY)
+
+    assert env.goal_position is not None
+    assert env.goal_position != previous_goal
+    assert info["events"][0]["type"] == "goal_reached"
+    assert info["events"][0]["actor_id"] == "ally"
+    assert math.dist(env.goal_position, (env.state["ally_pos"]["x"], env.state["ally_pos"]["y"])) >= env.goal_respawn_margin
 
 
 def test_goal_respawn_is_seed_deterministic():
@@ -154,7 +169,7 @@ def test_autoplay_goal_loop_config_loads():
     env = CPCEnv.from_config(config)
 
     assert config.goal.enabled is True
-    assert config.enemies[0].move_speed == 5.0
+    assert config.enemies[0].move_speed == config.player.move_speed == 20.0
     assert config.enemies[0].behavior == "pursue"
     assert env.goal_position == (680.0, 680.0)
     assert env.get_snapshot()["goal"]["enabled"] is True

@@ -50,6 +50,7 @@ class PygameCPCViewer:
         self._draw_goal(env_state, map_info, map_area)
         self._draw_projectiles(env_state, map_info, map_area)
         self._draw_agents(env_state, map_info, map_area, step_record)
+        self._draw_cpc_anchor(env_state, map_info, map_area)
         self._draw_panel(env_state, step_record)
         pygame.display.flip()
         self.clock.tick(self.fps)
@@ -201,6 +202,59 @@ class PygameCPCViewer:
                 )
                 self.pygame.draw.line(self.surface, colors.BULLET, center, direction_end, width=2)
 
+    def _draw_cpc_anchor(
+        self,
+        env_state: Mapping[str, Any],
+        map_info: Mapping[str, Any],
+        map_area: tuple[int, int],
+    ) -> None:
+        cpc_debug = env_state.get("cpc_debug", {})
+        anchor = cpc_debug.get("anchor_position") if isinstance(cpc_debug, Mapping) else None
+        if not isinstance(anchor, (Mapping, list, tuple)):
+            return
+        anchor_position = (
+            anchor
+            if isinstance(anchor, Mapping)
+            else {"x": float(anchor[0]), "y": float(anchor[1])}
+        )
+        ally = next(
+            (
+                agent
+                for name, agent in _agents(env_state).items()
+                if name == "ally" or agent.get("role") == "ally"
+            ),
+            None,
+        )
+        if ally is None or not ally.get("position"):
+            return
+
+        bot_center = world_to_screen(ally["position"], map_info, map_area, self.padding)
+        anchor_center = world_to_screen(anchor_position, map_info, map_area, self.padding)
+        self.pygame.draw.line(self.surface, colors.GOAL, bot_center, anchor_center, width=2)
+        self.pygame.draw.circle(self.surface, colors.FIRE, anchor_center, 6)
+        self.pygame.draw.circle(self.surface, colors.GOAL, anchor_center, 10, width=2)
+
+        intent = str(cpc_debug.get("cpc_intent") or "-")
+        intent_label = self.small_font.render(intent, True, colors.TEXT)
+        self.surface.blit(intent_label, (anchor_center[0] + 10, anchor_center[1] - 18))
+
+        trace_line = str(cpc_debug.get("decision_trace_line") or "")
+        if trace_line:
+            rendered = self.small_font.render(trace_line, True, colors.TEXT)
+            max_width = max(1, map_area[0] - self.padding * 2)
+            if rendered.get_width() > max_width:
+                rendered = self.pygame.transform.smoothscale(
+                    rendered,
+                    (max_width, rendered.get_height()),
+                )
+            background = self.pygame.Surface(
+                (rendered.get_width() + 12, rendered.get_height() + 8),
+                self.pygame.SRCALPHA,
+            )
+            background.fill((20, 24, 31, 210))
+            self.surface.blit(background, (self.padding, 8))
+            self.surface.blit(rendered, (self.padding + 6, 12))
+
     def _draw_panel(self, env_state: Mapping[str, Any], step_record: Mapping[str, Any] | None) -> None:
         left = self.width - self.panel_width
         self.pygame.draw.rect(self.surface, colors.PANEL, (left, 0, self.panel_width, self.height))
@@ -339,6 +393,17 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
         lines.append(f"action: {manual_step.get('current_action', '-')}")
         for control_line in manual_step.get("controls", []):
             lines.append(str(control_line))
+    cpc_debug = env_state.get("cpc_debug", {})
+    if cpc_debug:
+        lines.extend(
+            [
+                "",
+                "CPC decision",
+                f"intent: {cpc_debug.get('cpc_intent', '-')}",
+                f"anchor: {_format_debug_position(cpc_debug.get('anchor_position'))}",
+                str(cpc_debug.get("decision_trace_line") or "-"),
+            ]
+        )
     tactical_debug = env_state.get("tactical_debug", {})
     if tactical_debug:
         lines.extend(

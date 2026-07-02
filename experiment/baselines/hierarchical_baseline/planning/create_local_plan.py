@@ -12,6 +12,8 @@ def create_local_plan(
     intent: str,
     global_plan: GlobalPlan | None,
     config: BaselineConfig,
+    anchor_override: tuple[float, float] | None = None,
+    combat_profile_override: str | None = None,
 ) -> tuple[LocalPlan, dict]:
     if intent == "IDLE":
         plan = LocalPlan(intent, None, None, None, None, None, (), 0)
@@ -21,14 +23,29 @@ def create_local_plan(
     profile_debug: dict = {}
     anchor_debug: dict = {}
     if intent == "GLOBAL_NAV":
-        anchor = global_plan.waypoints[-1] if global_plan and global_plan.waypoints else ctx.player_pos
+        anchor = (
+            anchor_override
+            if anchor_override is not None
+            else global_plan.waypoints[-1] if global_plan and global_plan.waypoints else ctx.player_pos
+        )
         tactical_mode = None
         combat_profile = None
-        anchor_debug = {"anchor": list(anchor), "reason": "global_goal_waypoint"}
+        anchor_debug = {
+            "anchor": list(anchor),
+            "reason": "execution_directive_anchor" if anchor_override is not None else "global_goal_waypoint",
+        }
     else:
         tactical_mode, mode_debug = select_tactical_mode(ctx, state, config)
-        combat_profile, profile_debug = select_combat_profile(ctx, state, tactical_mode, config)
-        anchor, anchor_debug = create_combat_anchor(ctx, state, combat_profile, config)
+        if combat_profile_override is not None:
+            combat_profile = combat_profile_override
+            profile_debug = {"reason": "execution_directive", "combat_movement_profile": combat_profile}
+        else:
+            combat_profile, profile_debug = select_combat_profile(ctx, state, tactical_mode, config)
+        if anchor_override is not None:
+            anchor = anchor_override
+            anchor_debug = {"anchor": list(anchor), "reason": "execution_directive_anchor"}
+        else:
+            anchor, anchor_debug = create_combat_anchor(ctx, state, combat_profile, config)
 
     path, target_cell, next_cell, move_bin, path_debug = create_local_path(
         ctx, state, anchor, combat_profile, config

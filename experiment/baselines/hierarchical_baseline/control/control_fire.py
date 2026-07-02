@@ -32,7 +32,8 @@ def build_fire_status(
     )
     los_ok = bool(live_combat_target and ctx.line_of_sight)
     poke_edge_fire = bool(
-        str(config.combat_movement_profile or "").strip().lower() == "poke_out"
+        str(local_plan.combat_profile or config.combat_movement_profile or "").strip().lower()
+        == "poke_out"
         and fire_ready
         and not target_in_range
         and ctx.enemy_dist is not None

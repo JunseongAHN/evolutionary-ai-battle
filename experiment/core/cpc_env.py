@@ -219,6 +219,7 @@ class CPCEnv:
         self.state: dict[str, Any] = {}
         self.projectiles: list[dict[str, Any]] = []
         self.weapon: dict[str, Any] = {}
+        self.ally_weapon: dict[str, Any] = {}
         self.enemy_weapon: dict[str, Any] = {}
         self.last_aim_debug: dict[str, Any] = {}
         self.last_zone_debug: dict[str, Any] = {}
@@ -346,6 +347,10 @@ class CPCEnv:
             "cooldown_remaining_steps": 0,
             "fire_interval_steps": self.fire_interval_steps,
         }
+        self.ally_weapon = {
+            "cooldown_remaining_steps": 0,
+            "fire_interval_steps": self.fire_interval_steps,
+        }
         self.enemy_weapon = {
             "cooldown_remaining_steps": 0,
             "fire_interval_steps": self.fire_interval_steps,
@@ -362,7 +367,11 @@ class CPCEnv:
         self.goal_position = self._initial_goal_position()
         return self.observation()
 
-    def step(self, action: Mapping[str, Any]) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
+    def step(
+        self,
+        action: Mapping[str, Any],
+        ally_action: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], float, bool, dict[str, Any]]:
         raw_action: dict[str, int | float] = {
             "move": int(action["move"]),
             "fire": int(action["fire"]),
@@ -430,8 +439,15 @@ class CPCEnv:
             bullet_spawned, fire_blocked_reason, spawn_event = self._try_spawn_bullet(effective_decoded)
         if spawn_event is not None:
             bullet_events.append(spawn_event)
+        ally_cooldown_before = int(self.ally_weapon["cooldown_remaining_steps"])
+        ally_bullet_spawned, ally_fire_blocked_reason, ally_spawn_event = (
+            self._try_spawn_ally_bullet(ally_action)
+        )
+        if ally_spawn_event is not None:
+            bullet_events.append(ally_spawn_event)
         self._tick_weapon_cooldowns()
         cooldown_after = int(self.weapon["cooldown_remaining_steps"])
+        ally_cooldown_after = int(self.ally_weapon["cooldown_remaining_steps"])
         suppress_enemy_projectile = bullet_spawned or any(
             event.get("owner_id") == "self"
             and event.get("type") in {"bullet_hit", "bullet_hit_obstacle", "bullet_expired"}
@@ -501,9 +517,18 @@ class CPCEnv:
             shot_fired_when_valid=bool(bullet_spawned and fire_debug["fire_valid"]),
             shot_fired=bullet_spawned,
             off_target_shot=bullet_spawned and float(fire_debug["aim_error"]) > 0.15,
-            bullet_hit=any(event.get("type") == "bullet_hit" for event in bullet_events),
-            missed_shot=any(event.get("type") == "bullet_expired" for event in bullet_events)
-            and not any(event.get("type") == "bullet_hit" for event in bullet_events),
+            bullet_hit=any(
+                event.get("type") == "bullet_hit" and event.get("owner_id") == "self"
+                for event in bullet_events
+            ),
+            missed_shot=any(
+                event.get("type") == "bullet_expired" and event.get("owner_id") == "self"
+                for event in bullet_events
+            )
+            and not any(
+                event.get("type") == "bullet_hit" and event.get("owner_id") == "self"
+                for event in bullet_events
+            ),
             distance_to_enemy=enemy_distance,
             in_good_range=bool(range_debug["in_good_range"]),
             too_close=bool(range_debug["too_close"]),
@@ -554,6 +579,14 @@ class CPCEnv:
                 "current_aim_bin": int(aim_debug.get("aim_bin", 0)),
                 "ideal_aim_bin": int(aim_debug.get("ideal_aim_bin", 0)),
                 "aim_error": float(fire_debug["aim_error"]),
+            },
+            "ally_fire": {
+                "fire_requested": bool(ally_action and int(ally_action.get("fire", 0)) == 1),
+                "shot_fired": ally_bullet_spawned,
+                "fire_blocked_reason": ally_fire_blocked_reason,
+                "cooldown_remaining_steps_before": ally_cooldown_before,
+                "cooldown_remaining_steps_after": ally_cooldown_after,
+                "fire_interval_steps": int(self.ally_weapon["fire_interval_steps"]),
             },
             "fire_selected": fire_requested,
             "shot_fired": bullet_spawned,
@@ -661,6 +694,7 @@ class CPCEnv:
                 "enemy_aim_noise_deg": float(self.enemy_aim_noise_deg),
             },
             "weapon": deepcopy(self.weapon),
+            "ally_weapon": deepcopy(self.ally_weapon),
             "state": deepcopy(self.state),
             "bullets": deepcopy(self.projectiles),
             "projectiles": deepcopy(self.projectiles),
@@ -748,10 +782,8 @@ class CPCEnv:
     def _update_goal_loop(self) -> list[dict[str, Any]]:
         if not self.goal_enabled or self.goal_position is None:
             return []
-        if float(self.state.get("self_hp", 0.0)) <= 0.0:
-            return []
-        distance_to_goal = self._distance_to_goal()
-        if distance_to_goal is None or distance_to_goal > self.goal_radius:
+        reached_by = self._goal_reached_by()
+        if reached_by is None:
             return []
 
         reached_position = list(self.goal_position)
@@ -759,6 +791,7 @@ class CPCEnv:
         events: list[dict[str, Any]] = [
             {
                 "type": "goal_reached",
+                "actor_id": reached_by,
                 "position": reached_position,
                 "goal_reached_count": int(self.goal_reached_count),
             }
@@ -772,6 +805,7 @@ class CPCEnv:
                 radius=self.goal_radius,
                 margin=self.goal_respawn_margin,
                 min_player_distance=self.goal_respawn_margin,
+                min_ally_distance=self.goal_respawn_margin,
             )
             self.goal_respawn_count += 1
             events.append(
@@ -833,6 +867,7 @@ class CPCEnv:
         radius: float,
         margin: float,
         min_player_distance: float,
+        min_ally_distance: float = 0.0,
         preferred_origin: tuple[float, float] | None = None,
     ) -> tuple[float, float]:
         edge_margin = max(float(radius), min(float(margin), min(self.width, self.height) / 2.0))
@@ -856,6 +891,14 @@ class CPCEnv:
                         {"x": candidate[0], "y": candidate[1]}, player
                     ) < min_player_distance:
                         continue
+                    ally = self.state.get("ally_pos")
+                    if (
+                        ally is not None
+                        and min_ally_distance > 0.0
+                        and self._distance({"x": candidate[0], "y": candidate[1]}, ally)
+                        < min_ally_distance
+                    ):
+                        continue
                     return candidate
         raise RuntimeError("unable to find a valid spawn position")
 
@@ -876,6 +919,20 @@ class CPCEnv:
             self.state["self_pos"],
             {"x": float(self.goal_position[0]), "y": float(self.goal_position[1])},
         )
+
+    def _goal_reached_by(self) -> str | None:
+        if self.goal_position is None:
+            return None
+        goal = {"x": float(self.goal_position[0]), "y": float(self.goal_position[1])}
+        for actor_id, hp_key, position_key in (
+            ("self", "self_hp", "self_pos"),
+            ("ally", "ally_hp", "ally_pos"),
+        ):
+            if float(self.state.get(hp_key, 0.0)) <= 0.0:
+                continue
+            if self._distance(self.state[position_key], goal) <= self.goal_radius:
+                return actor_id
+        return None
 
     def _goal_debug_state(self) -> dict[str, Any]:
         return {
@@ -905,7 +962,7 @@ class CPCEnv:
                 float(direction.get("y", 0.0)) * speed,
             ],
             "owner_id": owner_id,
-            "team": "player" if owner_id == "self" else "enemy" if owner_id == "enemy" else None,
+            "team": "player" if owner_id in {"self", "ally"} else "enemy" if owner_id == "enemy" else None,
             "radius": float(bullet.get("radius", self.projectile_radius)),
             "ttl": None,
         }
@@ -1032,6 +1089,65 @@ class CPCEnv:
             "pos": deepcopy(bullet["pos"]),
         }
 
+    def _try_spawn_ally_bullet(
+        self,
+        action: Mapping[str, Any] | None,
+    ) -> tuple[bool, str | None, dict[str, Any] | None]:
+        if action is None or int(action.get("fire", 0)) != 1:
+            return False, None, None
+        if float(self.state.get("ally_hp", 0.0)) <= 0.0:
+            return False, "ally_dead", {
+                "type": "bullet_not_spawned",
+                "reason": "ally_dead",
+                "owner_id": "ally",
+                "pos": deepcopy(self.state["ally_pos"]),
+            }
+        if float(self.state.get("enemy_hp", 0.0)) <= 0.0:
+            return False, "no_live_enemy", {
+                "type": "bullet_not_spawned",
+                "reason": "no_live_enemy",
+                "owner_id": "ally",
+                "pos": deepcopy(self.state["ally_pos"]),
+            }
+        if int(self.ally_weapon.get("cooldown_remaining_steps", 0)) > 0:
+            return False, "cooldown", {
+                "type": "bullet_not_spawned",
+                "reason": "cooldown",
+                "owner_id": "ally",
+                "pos": deepcopy(self.state["ally_pos"]),
+                "cooldown_remaining_steps": int(
+                    self.ally_weapon["cooldown_remaining_steps"]
+                ),
+            }
+
+        decoded = decode_action(action)
+        direction = normalize_vec(
+            {"x": float(decoded["aimX"]), "y": float(decoded["aimY"])}
+        )
+        if abs(direction["x"]) <= 1e-6 and abs(direction["y"]) <= 1e-6:
+            return False, "invalid_aim", {
+                "type": "bullet_not_spawned",
+                "reason": "invalid_aim",
+                "owner_id": "ally",
+                "pos": deepcopy(self.state["ally_pos"]),
+            }
+
+        bullet = self._spawn_projectile(
+            owner_id="ally",
+            position=self.state["ally_pos"],
+            direction=direction,
+            damage=self.damage,
+        )
+        self.ally_weapon["cooldown_remaining_steps"] = int(
+            self.ally_weapon["fire_interval_steps"]
+        )
+        return True, None, {
+            "type": "bullet_spawned",
+            "bullet_id": bullet["bullet_id"],
+            "owner_id": "ally",
+            "pos": deepcopy(bullet["pos"]),
+        }
+
     def _spawn_projectile(
         self,
         *,
@@ -1061,6 +1177,10 @@ class CPCEnv:
         self.weapon["cooldown_remaining_steps"] = max(
             0,
             int(self.weapon.get("cooldown_remaining_steps", 0)) - 1,
+        )
+        self.ally_weapon["cooldown_remaining_steps"] = max(
+            0,
+            int(self.ally_weapon.get("cooldown_remaining_steps", 0)) - 1,
         )
         self.enemy_weapon["cooldown_remaining_steps"] = max(
             0,
@@ -1149,7 +1269,7 @@ class CPCEnv:
                 )
                 damage = min(float(bullet["damage"]), float(self.state[target["hp_key"]]))
                 self.state[target["hp_key"]] = max(0.0, float(self.state[target["hp_key"]]) - damage)
-                if target["target_id"] == "enemy":
+                if target["target_id"] == "enemy" and bullet.get("owner_id") == "self":
                     damage_dealt += damage
                 elif target["target_id"] == "self":
                     damage_taken += damage
@@ -1276,7 +1396,7 @@ class CPCEnv:
 
     def _projectile_target(self, bullet: dict[str, Any]) -> dict[str, Any] | None:
         owner_id = str(bullet.get("owner_id", ""))
-        if owner_id == "self":
+        if owner_id in {"self", "ally"}:
             if float(self.state.get("enemy_hp", 0.0)) <= 0.0:
                 return None
             return {
@@ -1385,8 +1505,14 @@ class CPCEnv:
         aim_bin_error = int(aim_debug["aim_bin_error"])
         self_dead = previous_self_hp > 0.0 and float(self.state["self_hp"]) <= 0.0
         enemy_dead = previous_enemy_hp > 0.0 and float(self.state["enemy_hp"]) <= 0.0
-        bullet_expired = any(event.get("type") == "bullet_expired" for event in bullet_events)
-        bullet_hit = any(event.get("type") == "bullet_hit" for event in bullet_events)
+        bullet_expired = any(
+            event.get("type") == "bullet_expired" and event.get("owner_id") == "self"
+            for event in bullet_events
+        )
+        bullet_hit = any(
+            event.get("type") == "bullet_hit" and event.get("owner_id") == "self"
+            for event in bullet_events
+        )
         shot_fired = bool(bullet_spawned)
         combat_engaged_this_step = shot_fired or float(damage_dealt) > 0.0 or float(damage_taken) > 0.0
         enemy_hp_loss_ratio = float(damage_dealt) / max(1.0, self.enemy_max_hp)
