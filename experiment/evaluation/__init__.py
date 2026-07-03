@@ -12,12 +12,16 @@ from .cpc_intent import (
     CpcIntentArbiter,
     CpcIntentInputs,
     CpcTargetResolver,
-    DecisionTrace,
     Layer1Output,
     Layer2Output,
     TargetRef,
-    derive_decision_trace,
-    format_decision_trace,
+)
+from .decision_record import (
+    DecisionRecord,
+    TacticalFrame,
+    build_decision_record,
+    derive_tactical_frames,
+    format_selected_frame,
 )
 
 __all__ = [
@@ -28,14 +32,16 @@ __all__ = [
     "CpcIntentArbiter",
     "CpcIntentInputs",
     "CpcTargetResolver",
-    "DecisionTrace",
+    "DecisionRecord",
     "Layer1Output",
     "Layer2Output",
     "TargetRef",
+    "TacticalFrame",
     "EvaluationEpisode",
     "QuestionnaireAnswers",
     "create_session_id",
-    "derive_decision_trace",
-    "format_decision_trace",
+    "build_decision_record",
+    "derive_tactical_frames",
+    "format_selected_frame",
     "prompt_questionnaire",
 ]

@@ -78,26 +78,6 @@ class AppliedAction:
         return value
 
 
-@dataclass(frozen=True)
-class DecisionTrace:
-    when: str
-    why: str
-    who: str
-    where: tuple[float, float]
-    what: str
-    how: str
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "when": self.when,
-            "why": self.why,
-            "who": self.who,
-            "where": list(self.where),
-            "what": self.what,
-            "how": self.how,
-        }
-
-
 class CpcIntentArbiter:
     """Layer 1: select WHY/WHEN intent; selfishness is contained here."""
 
@@ -197,44 +177,6 @@ class CpcTargetResolver:
         )
 
 
-def derive_decision_trace(
-    layer1: Layer1Output,
-    layer2: Layer2Output,
-    layer3: CombatAction,
-) -> DecisionTrace:
-    intent = layer1.cpc_intent
-    target = layer2.target_ref
-    when = {
-        "SOLO_OBJECTIVE": "no_team_trigger",
-        "SUPPORT_TEAMMATE": "human_under_pressure",
-        "REGROUP": "teammate_too_far",
-        "FOCUS_FIRE": "enemy_selected",
-    }[intent]
-    why = intent.lower()
-    who = target.id or target.kind
-    if target.kind == "enemy":
-        action_active = bool(
-            layer3.move_bin != 0
-            or layer3.fire_requested
-            or abs(layer3.aim[0]) > 1e-6
-            or abs(layer3.aim[1]) > 1e-6
-        )
-        what = "engage_enemy" if action_active else "hold_engagement"
-    else:
-        what = {"goal": "pursue_objective", "teammate": "regroup"}[target.kind]
-    how = "poke_out" if target.kind == "enemy" else "navigate"
-    return DecisionTrace(when, why, who, layer2.anchor_position, what, how)
-
-
-def format_decision_trace(trace: DecisionTrace | Mapping[str, Any]) -> str:
-    value = trace.as_dict() if isinstance(trace, DecisionTrace) else dict(trace)
-    return (
-        f"WHEN {value.get('when', '-')} -> WHY {value.get('why', '-')} -> "
-        f"WHO {value.get('who', '-')} -> WHERE anchor -> "
-        f"WHAT {value.get('what', '-')} -> HOW {value.get('how', '-')}"
-    )
-
-
 def _combat_anchor(
     bot: Mapping[str, float],
     enemy: Mapping[str, float],
@@ -290,10 +232,7 @@ __all__ = [
     "CpcIntentArbiter",
     "CpcIntentInputs",
     "CpcTargetResolver",
-    "DecisionTrace",
     "Layer1Output",
     "Layer2Output",
     "TargetRef",
-    "derive_decision_trace",
-    "format_decision_trace",
 ]

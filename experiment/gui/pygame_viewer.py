@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
 
 from . import colors
@@ -209,7 +210,10 @@ class PygameCPCViewer:
         map_area: tuple[int, int],
     ) -> None:
         cpc_debug = env_state.get("cpc_debug", {})
-        anchor = cpc_debug.get("anchor_position") if isinstance(cpc_debug, Mapping) else None
+        selected_frame = (
+            cpc_debug.get("selected_frame", {}) if isinstance(cpc_debug, Mapping) else {}
+        )
+        anchor = selected_frame.get("where") if isinstance(selected_frame, Mapping) else None
         if not isinstance(anchor, (Mapping, list, tuple)):
             return
         anchor_position = (
@@ -234,11 +238,14 @@ class PygameCPCViewer:
         self.pygame.draw.circle(self.surface, colors.FIRE, anchor_center, 6)
         self.pygame.draw.circle(self.surface, colors.GOAL, anchor_center, 10, width=2)
 
-        intent = str(cpc_debug.get("cpc_intent") or "-")
-        intent_label = self.small_font.render(intent, True, colors.TEXT)
-        self.surface.blit(intent_label, (anchor_center[0] + 10, anchor_center[1] - 18))
+        frame_label = (
+            f"{selected_frame.get('who', '-')}/{selected_frame.get('task', '-')}:"
+            f"{selected_frame.get('target', '-')}"
+        )
+        rendered_label = self.small_font.render(frame_label, True, colors.TEXT)
+        self.surface.blit(rendered_label, (anchor_center[0] + 10, anchor_center[1] - 18))
 
-        trace_line = str(cpc_debug.get("decision_trace_line") or "")
+        trace_line = _format_selected_frame(selected_frame)
         if trace_line:
             rendered = self.small_font.render(trace_line, True, colors.TEXT)
             max_width = max(1, map_area[0] - self.padding * 2)
@@ -395,13 +402,18 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
             lines.append(str(control_line))
     cpc_debug = env_state.get("cpc_debug", {})
     if cpc_debug:
+        selected_frame = cpc_debug.get("selected_frame", {})
         lines.extend(
             [
                 "",
-                "CPC decision",
-                f"intent: {cpc_debug.get('cpc_intent', '-')}",
-                f"anchor: {_format_debug_position(cpc_debug.get('anchor_position'))}",
-                str(cpc_debug.get("decision_trace_line") or "-"),
+                "CPC selected frame",
+                f"who: {selected_frame.get('who', '-')}",
+                f"task: {selected_frame.get('task', '-')}",
+                f"target: {selected_frame.get('target', '-')}",
+                f"where: {_format_debug_position(selected_frame.get('where'))}",
+                f"how: {selected_frame.get('how', '-')}",
+                f"reason: {selected_frame.get('reason', '-')}",
+                _format_selected_frame(selected_frame),
             ]
         )
     tactical_debug = env_state.get("tactical_debug", {})
@@ -454,6 +466,15 @@ def _panel_lines(env_state: Mapping[str, Any], step_record: Mapping[str, Any] | 
         if key in metrics:
             lines.append(f"{key}: {float(metrics[key]):.3f}")
     return lines
+
+
+def _format_selected_frame(frame: Mapping[str, Any]) -> str:
+    where = json.dumps(frame.get("where", []), separators=(",", ":"))
+    return (
+        f"SELECTED {frame.get('who', '-')}/{frame.get('task', '-')}:"
+        f"{frame.get('target', '-')} WHERE {where} HOW {frame.get('how', '-')} "
+        f"REASON {frame.get('reason', '-')}"
+    )
 
 
 def _format_debug_position(position: Any) -> str:

@@ -19,15 +19,14 @@ from core.env_config import load_env_config
 from evaluation import (
     CPC_INTENTS,
     POLICY_IDS,
-    CombatAction,
     CpcIntentArbiter,
     CpcIntentInputs,
     CpcTargetResolver,
     EvaluationEpisode,
     Layer1Output,
     QuestionnaireAnswers,
-    derive_decision_trace,
-    format_decision_trace,
+    TacticalFrame,
+    format_selected_frame,
 )
 from gui.pygame_viewer import _panel_lines
 from scripts.run_cpc_evaluation import format_step_debug
@@ -64,7 +63,7 @@ def test_episode_outputs_share_session_id(tmp_path):
     assert summary == saved_summary
 
 
-def test_trajectory_contains_minimal_layers_and_decision_trace(tmp_path):
+def test_trajectory_contains_compact_selected_frame_record(tmp_path):
     episode = _episode(tmp_path, "cpc_support")
     episode.step(STAY)
     episode.finish(NEUTRAL_ANSWERS, end_reason="test_complete")
@@ -78,8 +77,9 @@ def test_trajectory_contains_minimal_layers_and_decision_trace(tmp_path):
         "bot_hp",
         "enemy_hp",
         "layers",
-        "decision_trace",
-        "decision_trace_line",
+        "decision_record",
+        "selected_frame_line",
+        "decision_record_log",
         "teammate_distance",
         "events",
     }.issubset(row)
@@ -94,10 +94,63 @@ def test_trajectory_contains_minimal_layers_and_decision_trace(tmp_path):
         "move_bin_applied",
         "fire_applied",
     }
-    assert row["decision_trace"]["why"] == "regroup"
+    assert "decision_trace" not in row
+    assert "decision_trace_line" not in row
+    record = row["decision_record"]
+    assert set(record) == {
+        "self_frame",
+        "team_frame",
+        "selected_frame",
+        "primitive_action",
+        "outcome",
+    }
+    assert record["self_frame"] == {
+        "who": "self",
+        "task": "advance_goal",
+        "target": "goal-0",
+        "where": [680.0, 680.0],
+        "how": "navigate",
+        "reason": "goal_available",
+    }
+    assert record["team_frame"] == record["selected_frame"]
+    assert record["selected_frame"] == {
+        "who": "team",
+        "task": "regroup_teammate",
+        "target": "teammate",
+        "where": [160.0, 160.0],
+        "how": "navigate",
+        "reason": "teammate_too_far",
+    }
+    assert all(
+        set(record[name]) == {"who", "task", "target", "where", "how", "reason"}
+        for name in ("self_frame", "team_frame", "selected_frame")
+    )
+    assert set(record["primitive_action"]) == {
+        "move_bin",
+        "aim",
+        "fire_requested",
+        "fire_applied",
+    }
+    assert set(record["outcome"]) == {
+        "damage_dealt",
+        "damage_taken",
+        "goal_reached",
+        "teammate_distance",
+        "bot_hp",
+        "player_hp",
+        "enemy_hp",
+    }
+    assert row["selected_frame_line"] == (
+        "SELECTED team/regroup_teammate:teammate WHERE [160.0,160.0] "
+        "HOW navigate REASON teammate_too_far"
+    )
+    assert row["decision_record_log"] == (
+        "CHANGE none/none:none -> team/regroup_teammate:teammate "
+        "REASON teammate_too_far"
+    )
 
 
-def test_print_debug_groups_layers_and_trace(tmp_path):
+def test_print_debug_uses_only_selected_frame_explanation(tmp_path):
     episode = _episode(tmp_path, "current_best")
     _, reward, done, info = episode.step(STAY)
     line = format_step_debug(episode, STAY, reward, done, info)
@@ -107,10 +160,36 @@ def test_print_debug_groups_layers_and_trace(tmp_path):
     assert "layer2.anchor_position=" in line
     assert "layer3.combat_action=" in line
     assert "layer4.applied_action=" in line
-    assert "decision_trace=" in line
-    assert "decision_trace_line=WHEN " in line
+    assert "decision_trace" not in line
+    assert "selected_frame=" in line
+    assert "selected_frame_line=SELECTED " in line
+    assert "decision_record_log=CHANGE none/none:none -> " in line
 
     episode.finish(NEUTRAL_ANSWERS, end_reason="test_complete")
+
+
+def test_decision_record_tracks_selected_option_age_without_affecting_actions(tmp_path):
+    episode = _episode(tmp_path, "current_best", selfish_level=1.0)
+    episode.env.enemy_move = False
+    episode.env.enemy_fire = False
+    episode.env.state["ally_pos"] = {"x": 100.0, "y": 100.0}
+    episode.env.state["self_pos"] = {"x": 100.0, "y": 250.0}
+    episode.env.state["enemy_pos"] = {"x": 200.0, "y": 100.0}
+    _, _, _, first_info = episode.step(STAY)
+    _, _, _, second_info = episode.step(STAY)
+    episode.finish(NEUTRAL_ANSWERS, end_reason="test_complete")
+
+    rows = _jsonl(tmp_path / episode.metadata.session_id / "trajectory.jsonl")
+    first_record = first_info["evaluation"]["bot"]["decision_record"]
+    second_record = second_info["evaluation"]["bot"]["decision_record"]
+
+    assert first_record == rows[0]["decision_record"]
+    assert second_record == rows[1]["decision_record"]
+    assert rows[1]["decision_record_log"] == "SAME self/fight_enemy:enemy-0 age=2"
+    assert rows[1]["decision_record"]["primitive_action"] == {
+        **rows[1]["bot_action"],
+        "fire_applied": rows[1]["bot_applied_action"]["fire_applied"],
+    }
 
 
 def test_selfish_level_changes_only_layer1_intent_thresholds():
@@ -201,53 +280,49 @@ def test_focus_fire_keeps_cpc_and_poke_logs_separate(tmp_path):
     episode.finish(NEUTRAL_ANSWERS, end_reason="test_complete")
 
 
-def test_decision_trace_is_derived_from_layer_outputs():
-    layer1 = Layer1Output("SUPPORT_TEAMMATE")
-    layer2 = CpcTargetResolver().resolve(
-        layer1,
-        bot_position={"x": 100.0, "y": 100.0},
-        human_position={"x": 300.0, "y": 480.0},
-        enemy_position={"x": 360.0, "y": 480.0},
-        goal_position=(700.0, 700.0),
-        enemy_id="enemy_0",
-        weapon_range=260.0,
-        map_width=800.0,
-        map_height=800.0,
+def test_selected_frame_renderer_uses_only_compact_frame_fields():
+    frame = TacticalFrame(
+        "team",
+        "fight_enemy",
+        "enemy-001",
+        (320.0, 480.0),
+        "poke_out",
+        "enemy_attacking_teammate",
     )
-    layer3 = CombatAction(4, (1.0, 0.0), 1)
 
-    trace = derive_decision_trace(layer1, layer2, layer3)
-
-    assert trace.when == "human_under_pressure"
-    assert trace.why == "support_teammate"
-    assert trace.who == "enemy_0"
-    assert trace.what == "engage_enemy"
-    assert trace.how == "poke_out"
-    assert format_decision_trace(trace) == (
-        "WHEN human_under_pressure -> WHY support_teammate -> WHO enemy_0 -> "
-        "WHERE anchor -> WHAT engage_enemy -> HOW poke_out"
+    assert format_selected_frame(frame) == (
+        "SELECTED team/fight_enemy:enemy-001 WHERE [320.0,480.0] "
+        "HOW poke_out REASON enemy_attacking_teammate"
     )
 
 
-def test_viewer_panel_shows_intent_anchor_and_trace():
-    trace_line = (
-        "WHEN human_under_pressure -> WHY support_teammate -> WHO enemy_0 -> "
-        "WHERE anchor -> WHAT engage_enemy -> HOW poke_out"
-    )
+def test_viewer_panel_uses_selected_frame_only():
     lines = _panel_lines(
         {
             "cpc_debug": {
-                "cpc_intent": "SUPPORT_TEAMMATE",
-                "anchor_position": [320.0, 480.0],
-                "decision_trace_line": trace_line,
+                "selected_frame": {
+                    "who": "team",
+                    "task": "fight_enemy",
+                    "target": "enemy-001",
+                    "where": [320.0, 480.0],
+                    "how": "poke_out",
+                    "reason": "enemy_attacking_teammate",
+                }
             }
         },
         None,
     )
 
-    assert "intent: SUPPORT_TEAMMATE" in lines
-    assert "anchor: (320.0,480.0)" in lines
-    assert trace_line in lines
+    assert "who: team" in lines
+    assert "task: fight_enemy" in lines
+    assert "target: enemy-001" in lines
+    assert "where: (320.0,480.0)" in lines
+    assert "how: poke_out" in lines
+    assert "reason: enemy_attacking_teammate" in lines
+    assert (
+        "SELECTED team/fight_enemy:enemy-001 WHERE [320.0,480.0] "
+        "HOW poke_out REASON enemy_attacking_teammate"
+    ) in lines
 
 
 def _episode(

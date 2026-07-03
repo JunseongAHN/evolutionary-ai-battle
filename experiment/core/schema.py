@@ -1,6 +1,106 @@
-from typing import Any, Dict, List, Literal, NotRequired, TypedDict
+import json
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Mapping, NotRequired, TypedDict
 
 SCHEMA_VERSION = "cpc-common-v0"
+
+
+Vec2Tuple = tuple[float, float]
+
+
+@dataclass(frozen=True)
+class CPCObservation:
+    """Framework-independent policy input assembled from an environment state."""
+
+    actor_id: str
+    state: Mapping[str, Any]
+    context: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CPCAction:
+    move: Vec2Tuple
+    aim: Vec2Tuple
+    fire: bool
+
+
+@dataclass(frozen=True)
+class TacticalFrame:
+    who: Literal["self", "team"]
+    task: Literal["advance_goal", "fight_enemy", "regroup_teammate", "escape_enemy", "hold_anchor"]
+    target: str
+    where: Vec2Tuple
+    how: Literal["navigate", "poke_out", "hold"]
+    reason: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"who": self.who, "task": self.task, "target": self.target,
+                "where": list(self.where), "how": self.how, "reason": self.reason}
+
+    @property
+    def identity(self) -> tuple[str, str, str]:
+        return self.who, self.task, self.target
+
+
+@dataclass(frozen=True)
+class CPCDecision:
+    action: CPCAction
+    selected_frame: TacticalFrame
+    trace: str
+
+
+@dataclass(frozen=True)
+class PrimitiveAction:
+    move_bin: int | None
+    move: Vec2Tuple | None
+    aim: Vec2Tuple
+    fire_requested: bool
+    fire_applied: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"move_bin": self.move_bin, "move": list(self.move) if self.move is not None else None,
+                "aim": list(self.aim), "fire_requested": self.fire_requested,
+                "fire_applied": self.fire_applied}
+
+
+@dataclass(frozen=True)
+class StepOutcome:
+    damage_dealt: float
+    damage_taken: float
+    bot_hp: float
+    player_hp: float | None
+    enemy_hp: float | None
+    goal_reached: bool
+    teammate_distance: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True)
+class DecisionRecord:
+    selected_frame: TacticalFrame
+    primitive_action: PrimitiveAction
+    outcome: StepOutcome
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"selected_frame": self.selected_frame.as_dict(),
+                "primitive_action": self.primitive_action.as_dict(),
+                "outcome": self.outcome.as_dict()}
+
+
+class CPCPolicy(ABC):
+    @abstractmethod
+    def decide(self, observation: CPCObservation) -> CPCDecision:
+        raise NotImplementedError
+
+
+def render_selected_frame(frame: TacticalFrame) -> str:
+    coordinates = [int(value) if float(value).is_integer() else value for value in frame.where]
+    where = json.dumps(coordinates, separators=(",", ":"))
+    return (f"SELECTED {frame.who}/{frame.task}:{frame.target} WHERE {where} "
+            f"HOW {frame.how} REASON {frame.reason}")
 
 BattleMode = Literal["solo", "duo"]
 AgentId = str

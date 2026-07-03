@@ -19,11 +19,15 @@ try:
     from experiment.core.cpc_actions import decode_action
     from experiment.core.cpc_env import CPCEnv
     from experiment.core.env_config import EnvConfig
+    from experiment.core.cpc_contract import build_cpc_observation
+    from experiment.core.schema import CPCAction, CPCDecision, CPCObservation, CPCPolicy, render_selected_frame
 except ModuleNotFoundError:
     from baselines.hierarchical_baseline import BaselineConfig, ExecutionDirective, HierarchicalBaselineAgent
     from core.cpc_actions import decode_action
     from core.cpc_env import CPCEnv
     from core.env_config import EnvConfig
+    from core.cpc_contract import build_cpc_observation
+    from core.schema import CPCAction, CPCDecision, CPCObservation, CPCPolicy, render_selected_frame
 
 from .cpc_intent import (
     AppliedAction,
@@ -31,11 +35,14 @@ from .cpc_intent import (
     CpcIntentArbiter,
     CpcIntentInputs,
     CpcTargetResolver,
-    DecisionTrace,
     Layer1Output,
     Layer2Output,
-    derive_decision_trace,
-    format_decision_trace,
+)
+from .decision_record import (
+    TacticalFrame,
+    build_decision_record,
+    derive_tactical_frames,
+    format_selected_frame,
 )
 
 
@@ -91,7 +98,6 @@ class BotDecision:
     layer1: Layer1Output
     layer2: Layer2Output
     combat_action: CombatAction
-    decision_trace: DecisionTrace
     reason: str
     debug: dict[str, Any]
 
@@ -106,7 +112,7 @@ class BotDecision:
         }
 
 
-class CpcBotPolicy:
+class CpcBotPolicy(CPCPolicy):
     def __init__(self, policy_id: str, selfish_level: float | None = None):
         if policy_id not in POLICY_IDS:
             raise ValueError(f"unknown policy_id {policy_id!r}; expected one of {POLICY_IDS}")
@@ -121,7 +127,27 @@ class CpcBotPolicy:
         self._last_human_hp: float | None = None
         self._human_damage_history: deque[float] = deque(maxlen=5)
 
-    def decide(self, env: CPCEnv) -> BotDecision:
+    def decide(self, observation: CPCObservation) -> CPCDecision:
+        env = observation.context.get("env")
+        if not isinstance(env, CPCEnv):
+            raise TypeError("CpcBotPolicy requires an observation built from CPCEnv")
+        internal = self._decide_env(env)
+        goal_position = tuple(env.goal_position) if env.goal_position is not None else internal.layer2.anchor_position
+        teammate_position = (float(env.state["self_pos"]["x"]), float(env.state["self_pos"]["y"]))
+        _, _, selected_frame = derive_tactical_frames(
+            internal.layer1, internal.layer2,
+            goal_position=goal_position, teammate_position=teammate_position,
+        )
+        decoded = decode_action(internal.requested_action)
+        action = CPCAction(
+            move=(float(decoded["moveX"]), float(decoded["moveY"])),
+            aim=internal.combat_action.aim,
+            fire=bool(internal.combat_action.fire_requested),
+        )
+        self.last_internal_decision = internal
+        return CPCDecision(action, selected_frame, render_selected_frame(selected_frame))
+
+    def _decide_env(self, env: CPCEnv) -> BotDecision:
         inputs = self._intent_inputs(env)
         enemy_alive = float(env.state["enemy_hp"]) > 0.0
         enemy_position = env.state["enemy_pos"] if enemy_alive else None
@@ -151,9 +177,8 @@ class CpcBotPolicy:
             aim=(float(requested.get("aim_dx", 1.0)), float(requested.get("aim_dy", 0.0))),
             fire_requested=int(requested.get("fire", 0)),
         )
-        decision_trace = derive_decision_trace(layer1, layer2, combat_action)
         reason = _bot_reason(debug)
-        return BotDecision(layer1, layer2, combat_action, decision_trace, reason, dict(debug))
+        return BotDecision(layer1, layer2, combat_action, reason, dict(debug))
 
     def _intent_inputs(self, env: CPCEnv) -> CpcIntentInputs:
         human_hp = float(env.state["self_hp"])
@@ -214,6 +239,8 @@ class EvaluationRecorder:
         self.support_responses = 0
         self.event_counts: Counter[str] = Counter()
         self.intent_counts: Counter[str] = Counter()
+        self._previous_frame_identity: tuple[str, str, str] | None = None
+        self._selected_frame_age = 0
 
     def record_step(
         self,
@@ -227,7 +254,8 @@ class EvaluationRecorder:
         done: bool,
         info: Mapping[str, Any],
         teammate_distance_before: float,
-    ) -> None:
+        tactical_frames: tuple[TacticalFrame, TacticalFrame, TacticalFrame],
+    ) -> tuple[dict[str, Any], str, str]:
         player = _mapping(snapshot_after.get("player"))
         enemy = _first_mapping(snapshot_after.get("enemies"))
         bot = _mapping(_mapping(info.get("evaluation")).get("bot"))
@@ -249,6 +277,23 @@ class EvaluationRecorder:
             and event.get("owner_id") == "ally"
             and event.get("target_id") == "enemy"
         )
+        self_frame, team_frame, selected_frame = tactical_frames
+        decision_record = build_decision_record(
+            self_frame=self_frame,
+            team_frame=team_frame,
+            selected_frame=selected_frame,
+            combat_action=bot_decision.combat_action,
+            applied_action=applied_action,
+            damage_dealt=damage_dealt,
+            damage_taken=damage_taken,
+            goal_reached=any(event.get("type") == "goal_reached" for event in events),
+            teammate_distance=teammate_distance,
+            bot_hp=float(bot.get("hp", 0.0)),
+            player_hp=float(player.get("hp", 0.0)),
+            enemy_hp=float(enemy.get("hp", 0.0)),
+        )
+        selected_frame_line = format_selected_frame(decision_record.selected_frame)
+        decision_record_log = self._format_frame_transition(decision_record.selected_frame)
 
         row = {
             **asdict(self.metadata),
@@ -268,8 +313,9 @@ class EvaluationRecorder:
             "bot_micro_intent": bot_decision.debug.get("micro_intent"),
             "poke_state": bot_decision.debug.get("poke_state"),
             "layers": dict(layers),
-            "decision_trace": bot_decision.decision_trace.as_dict(),
-            "decision_trace_line": format_decision_trace(bot_decision.decision_trace),
+            "decision_record": decision_record.as_dict(),
+            "selected_frame_line": selected_frame_line,
+            "decision_record_log": decision_record_log,
             "teammate_distance": teammate_distance,
             "isolated": isolated,
             "support_opportunity": teammate_distance_before > ISOLATION_DISTANCE,
@@ -293,6 +339,24 @@ class EvaluationRecorder:
         self.support_responses += int(support_response)
         self.event_counts.update(str(event.get("type", "unknown")) for event in events)
         self.intent_counts.update([str(layer1.get("cpc_intent", "unknown"))])
+        return decision_record.as_dict(), selected_frame_line, decision_record_log
+
+    def _format_frame_transition(self, selected_frame: TacticalFrame) -> str:
+        identity = selected_frame.identity
+        if identity == self._previous_frame_identity:
+            self._selected_frame_age += 1
+            return (
+                f"SAME {identity[0]}/{identity[1]}:{identity[2]} "
+                f"age={self._selected_frame_age}"
+            )
+
+        previous = self._previous_frame_identity or ("none", "none", "none")
+        self._previous_frame_identity = identity
+        self._selected_frame_age = 1
+        return (
+            f"CHANGE {previous[0]}/{previous[1]}:{previous[2]} -> "
+            f"{identity[0]}/{identity[1]}:{identity[2]} REASON {selected_frame.reason}"
+        )
 
     def finish(
         self,
@@ -391,9 +455,29 @@ class EvaluationEpisode:
         if self.done:
             raise RuntimeError("episode is already complete")
         teammate_distance_before = _distance(self.env.state["self_pos"], self.env.state["ally_pos"])
+        goal_position_before = (
+            tuple(self.env.goal_position)
+            if self.env.goal_position is not None
+            else (
+                float(self.env.state["ally_pos"]["x"]),
+                float(self.env.state["ally_pos"]["y"]),
+            )
+        )
+        teammate_position_before = (
+            float(self.env.state["self_pos"]["x"]),
+            float(self.env.state["self_pos"]["y"]),
+        )
         bot_hp_before = float(self.env.state["ally_hp"])
         bot_position_before = deepcopy(self.env.state["ally_pos"])
-        bot_decision = self.policy.decide(self.env)
+        decision = self.policy.decide(build_cpc_observation(self.env, "ally"))
+        bot_decision = self.policy.last_internal_decision
+        tactical_frames = derive_tactical_frames(
+            bot_decision.layer1,
+            bot_decision.layer2,
+            goal_position=goal_position_before,
+            teammate_position=teammate_position_before,
+        )
+        assert tactical_frames[2] == decision.selected_frame
         move_bin_applied, movement_blocked_reason = _apply_bot_movement(
             self.env,
             bot_decision.requested_action,
@@ -435,8 +519,6 @@ class EvaluationEpisode:
                     "layer3": {"combat_action": bot_decision.combat_action.as_dict()},
                     "layer4": {"applied_action": applied_action.as_dict()},
                 },
-                "decision_trace": bot_decision.decision_trace.as_dict(),
-                "decision_trace_line": format_decision_trace(bot_decision.decision_trace),
                 "debug": {
                     "intent": bot_decision.debug.get("intent"),
                     "combat_profile": bot_decision.debug.get("combat_profile"),
@@ -453,7 +535,7 @@ class EvaluationEpisode:
             }
         }
         snapshot_after = self.env.get_snapshot()
-        self.recorder.record_step(
+        decision_record, selected_frame_line, decision_record_log = self.recorder.record_step(
             timestamp=utc_timestamp(),
             snapshot_after=snapshot_after,
             human_action=human_action,
@@ -463,7 +545,11 @@ class EvaluationEpisode:
             done=self.done,
             info=info,
             teammate_distance_before=teammate_distance_before,
+            tactical_frames=tactical_frames,
         )
+        info["evaluation"]["bot"]["decision_record"] = decision_record
+        info["evaluation"]["bot"]["selected_frame_line"] = selected_frame_line
+        info["evaluation"]["bot"]["decision_record_log"] = decision_record_log
         return self.obs, reward, self.done, info
 
     def finish(self, questionnaire: QuestionnaireAnswers, *, end_reason: str) -> dict[str, Any]:
