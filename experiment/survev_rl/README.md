@@ -24,6 +24,7 @@ Hard dependencies: `torch`, `numpy`, `websockets` (>= 13; 15.x tested). `pytest`
 | `train_ppo.py` | training CLI (`--mock` for the in-process mock) |
 | `eval.py` | evaluation CLI: win rate / survival / HP / damage over N episodes + per-episode JSONL, `to_harness_episode()` stub |
 | `export_onnx.py` | actor -> ONNX (dynamic batch) + sidecar JSON with head offsets / bins / vector keys |
+| `policy_server.py` | the inverse of the bridge: serves a checkpoint over WebSocket (`reset` / `act` with spec observations -> `CpcAction` wire form) so a live, client-rendered game can ask Python for the agent's actions |
 | `tests/` | pytest suite (< 10 s) |
 
 ## Running on the Windows machine
@@ -39,7 +40,14 @@ python -m experiment.survev_rl.train_ppo --bridge ws://127.0.0.1:8765 --n-envs 1
 python -m experiment.survev_rl.eval --checkpoint runs\ppo_v0\checkpoint_final.pt ^
     --bridge ws://127.0.0.1:8765 --episodes 50 --out runs\ppo_v0\eval.jsonl
 python -m experiment.survev_rl.export_onnx --checkpoint runs\ppo_v0\checkpoint_final.pt --out runs\ppo_v0\actor.onnx
+python -m experiment.survev_rl.policy_server --checkpoint runs\ppo_v0\checkpoint_final.pt --port 8766
+                                     :: a game process (survev live hook) connects and asks for actions
 ```
+
+The bridge must include survev commit `5f118a6c` ("accept Input names in CpcAction"): before it,
+the named inputs this client sends (`Interact`, `EquipPrimary`, `Reload`) were silently dropped by
+the engine, so bridge-trained agents could not pick up, equip or reload (the `real_smoke`/first
+`ppo_ep2` runs were affected; every number below is from the fixed bridge).
 
 Mock mode (no game server; the mock runs in a thread of the same process):
 
@@ -214,6 +222,32 @@ not a physics clone: expect numbers (TTK, hit rates, timings) to differ from the
 * Suggested curriculum: `--loadout armed` + idle -> `--loadout armed` + chaser -> fists + chaser,
   with a larger `damage_dealt`/`kill` weight or a time penalty (`--reward-json`) to counter the
   flee optimum. These are mock numbers — the real server's TTK and hit model differ.
+
+## What the real bridge runs showed (fixed bridge, 600k agent steps, 8 envs, CPU, ~5 min each)
+
+Rendered frames of both runs are in `out/ep2/` and `out/ep2_armed/` (real client, camera player,
+0.5 s / 0.2 s cadence; `live_episode.json` holds per-tick positions, HP, events and every PPO decision).
+
+* **v0 defaults** (fists, `chaser`, default `RewardConfig`): survival 6 s -> 19.8 s, then a
+  plateau; 0 shots, 0 damage dealt, win 0 %. The policy runs south-west from the first step,
+  reaches the beach at ~5 s, the water at ~8 s, gets pinned in the map corner (1, 1) at ~12 s and
+  is shot there (`out/ep2`). Fleeing is the local optimum of alive +0.01 / death -1; the
+  loot -> equip -> aim chain is never explored on the real server either.
+* **`--loadout armed`** (everyone spawns with an ak47, same reward): win 91 %, ~6 s episodes,
+  hp_end 78, 120 damage dealt / 36 taken, 19 shots -> 8.5 hits. But the frames show *what* was
+  learned (`out/ep2_armed`): stand still, aim east (aim bin 0) and hold fire from t = 0 — the
+  chasers spawn on the same y and run straight into the stream (chaser fires only inside 30 u,
+  so it usually dies first). When one survives and closes in, the policy switches to the flee
+  behaviour (move west, no fire, random aim) and dies at the west edge. It is a spawn-geometry
+  exploit, not tracking of a moving target.
+* Consequences for the next iteration: randomize spawn sides / orientation and the loot layout
+  per episode (seeded), give the featurizer a relative aim error toward the nearest enemy (or an
+  aim-at-enemy assist), and use the harness `chaser` as a *curriculum* opponent rather than the
+  benchmark — the metric vector (survival, HP, damage, team win, partner survival) is already
+  produced per episode, so `eval.py` output can go straight into the harness comparison.
+* Coordinates: `MOVE_LABELS` are the harness names with screen-y-down (`up` = (0, -1)); in survev
+  world coordinates y grows upward on screen, so the label `up_left` is a south-west move. Use
+  the vectors, not the names, when reading decisions.
 
 ## Interpretations of the spec made here (to align with the bridge)
 
