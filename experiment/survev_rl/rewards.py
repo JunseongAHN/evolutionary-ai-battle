@@ -22,10 +22,19 @@ rewards: the metric vector in ``info.metrics`` stays separate (harness conventio
 Extensibility hooks: ``partner_hp_delta`` / ``partner_alive_per_step`` (cooperation),
 ``cover_bonus`` (placeholder term, 0 until obstacle/LOS features exist) and
 ``time_penalty_after_s`` / ``time_penalty_per_step`` (anti-stalling).
+
+Waypoint terms (v1 "global point" objective, all 0 by default; ``goal`` = world (x, y) passed by
+the env): ``goal_progress`` x (distance to the point removed this step, in u, while standing),
+``goal_hold`` per step while standing within ``goal_radius`` of the point, and ``enemy_at_goal`` x
+sum over living enemies of max(0, 1 - d_enemy_to_point / enemy_goal_radius) — a penalty that only
+goes away when enemies are kept (or killed) away from the point. Enemy positions come from the
+bridge's per-agent observations of the *enemies* (privileged, reward-side only; the policy still
+sees only its own observation).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -43,6 +52,9 @@ COMPONENT_KEYS: tuple[str, ...] = (
     "partner_alive",
     "cover",
     "time",
+    "goal_progress",
+    "goal_hold",
+    "enemy_goal",
 )
 
 
@@ -60,6 +72,11 @@ class RewardConfig:
     cover_bonus: float = 0.0
     time_penalty_after_s: float = 0.0  # 0 = disabled
     time_penalty_per_step: float = 0.0  # applied per step once t > time_penalty_after_s
+    goal_progress: float = 0.0  # per world unit of distance-to-goal removed (standing agents only)
+    goal_hold: float = 0.0  # per step while standing within goal_radius of the goal
+    goal_radius: float = 6.0
+    enemy_at_goal: float = 0.0  # per step x sum_enemies max(0, 1 - d / enemy_goal_radius); use a negative weight
+    enemy_goal_radius: float = 30.0
     team_mix: float = 0.0
 
     def __post_init__(self) -> None:
@@ -108,6 +125,30 @@ def _partner_entry(obs: AgentObservation) -> Mapping[str, Any] | None:
     return teammates[0] if teammates else None
 
 
+def _pos(state: Mapping[str, Any]) -> tuple[float, float]:
+    p = state.get("pos") or {}
+    return float(p.get("x", 0.0)), float(p.get("y", 0.0))
+
+
+def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def enemy_goal_pressure(
+    obs: Mapping[str, AgentObservation], team: str, goal: tuple[float, float], radius: float
+) -> float:
+    """sum over living enemies of max(0, 1 - d(enemy, goal) / radius) (0 when nobody is near)."""
+    if radius <= 0.0:
+        return 0.0
+    total = 0.0
+    for other in obs.values():
+        st = other["self"]
+        if str(st.get("team", "")) == team or st.get("dead"):
+            continue
+        total += max(0.0, 1.0 - _dist(_pos(st), goal) / radius)
+    return total
+
+
 def compute_reward_components(
     prev_obs: Mapping[str, AgentObservation],
     obs: Mapping[str, AgentObservation],
@@ -116,6 +157,7 @@ def compute_reward_components(
     config: RewardConfig,
     controlled: Sequence[str] | None = None,
     t: float | None = None,
+    goal: tuple[float, float] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Signed reward components per controlled agent (before ``team_mix``)."""
     if isinstance(info, ObsInfo):
@@ -174,6 +216,14 @@ def compute_reward_components(
             and not me.get("dead")
         ):
             comp["time"] = config.time_penalty_per_step
+        if goal is not None:
+            standing = not me.get("dead") and not me.get("downed")
+            if standing and not me_prev.get("dead") and not me_prev.get("downed"):
+                comp["goal_progress"] = config.goal_progress * (_dist(_pos(me_prev), goal) - _dist(_pos(me), goal))
+            if standing and _dist(_pos(me), goal) <= config.goal_radius:
+                comp["goal_hold"] = config.goal_hold
+            if not me.get("dead") and config.enemy_at_goal != 0.0:
+                comp["enemy_goal"] = config.enemy_at_goal * enemy_goal_pressure(obs, team, goal, config.enemy_goal_radius)
         out[aid] = comp
     return out
 
@@ -200,9 +250,10 @@ def compute_rewards(
     config: RewardConfig,
     controlled: Sequence[str] | None = None,
     t: float | None = None,
+    goal: tuple[float, float] | None = None,
 ) -> dict[str, float]:
     """Scalar reward per controlled agent for the transition ``prev_obs -> obs``."""
-    return compute_reward_breakdown(prev_obs, obs, events, info, config, controlled, t).totals
+    return compute_reward_breakdown(prev_obs, obs, events, info, config, controlled, t, goal).totals
 
 
 def compute_reward_breakdown(
@@ -213,8 +264,9 @@ def compute_reward_breakdown(
     config: RewardConfig,
     controlled: Sequence[str] | None = None,
     t: float | None = None,
+    goal: tuple[float, float] | None = None,
 ) -> RewardBreakdown:
-    components = compute_reward_components(prev_obs, obs, events, info, config, controlled, t)
+    components = compute_reward_components(prev_obs, obs, events, info, config, controlled, t, goal)
     totals = {aid: float(sum(c.values())) for aid, c in components.items()}
     teams = {aid: str(obs[aid]["self"].get("team", "")) for aid in components}
     return RewardBreakdown(components=components, totals=mix_team_rewards(totals, teams, config.team_mix))

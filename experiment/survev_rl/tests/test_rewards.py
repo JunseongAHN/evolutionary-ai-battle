@@ -139,3 +139,70 @@ def test_time_penalty_after_threshold():
     assert compute_rewards(_obs(), _obs(), [], RUNNING, cfg, CONTROLLED, t=31.0)["team-a-0"] == pytest.approx(-0.01)
     obs = _obs(a0_hp=0.0, a0_dead=True)
     assert compute_rewards(obs, copy.deepcopy(obs), [], RUNNING, cfg, CONTROLLED, t=31.0)["team-a-0"] == 0.0
+
+
+def _placed(obs, positions):
+    """Copy of ``obs`` with agents moved to the given world positions."""
+    out = copy.deepcopy(obs)
+    for aid, (x, y) in positions.items():
+        out[aid]["self"]["pos"] = {"x": float(x), "y": float(y)}
+    return out
+
+
+POINT = (132.0, 132.0)
+POINT_CFG = RewardConfig(alive_per_step=0.0, hp_delta=0.0, damage_dealt=0.0, death=0.0, team_win=0.0,
+                         goal_progress=0.05, goal_hold=0.01, goal_radius=6.0, enemy_at_goal=-0.02, enemy_goal_radius=30.0)
+
+
+def test_goal_terms_are_inactive_without_a_goal_or_weights():
+    prev = _placed(_obs(), {"team-a-0": (100, 132)})
+    cur = _placed(_obs(), {"team-a-0": (110, 132)})
+    # default config: no waypoint weights -> identical to before even when a goal is passed
+    b = compute_reward_breakdown(prev, cur, [], RUNNING, RewardConfig(), CONTROLLED, goal=POINT)
+    assert b.components["team-a-0"]["goal_progress"] == 0.0 and b.components["team-a-0"]["enemy_goal"] == 0.0
+    # waypoint weights but no goal passed -> terms stay 0
+    b = compute_reward_breakdown(prev, cur, [], RUNNING, POINT_CFG, CONTROLLED)
+    assert b.totals["team-a-0"] == 0.0
+
+
+def test_goal_progress_hold_and_enemy_pressure():
+    far = {"team-b-0": (300, 300), "team-b-1": (300, 300)}
+    prev = _placed(_obs(), {"team-a-0": (100, 132), "team-a-1": (100, 140), **far})
+    cur = _placed(_obs(), {"team-a-0": (110, 132), "team-a-1": (100, 140), **far})
+    b = compute_reward_breakdown(prev, cur, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
+    a0, a1 = b.components["team-a-0"], b.components["team-a-1"]
+    assert a0["goal_progress"] == pytest.approx(0.05 * 10.0)  # 32 u -> 22 u from the point
+    assert a1["goal_progress"] == pytest.approx(0.0) and a0["goal_hold"] == 0.0 == a1["goal_hold"]
+    assert a0["enemy_goal"] == 0.0  # enemies far from the point
+
+    # standing inside goal_radius pays the hold bonus; moving away is negative progress
+    on_point = _placed(_obs(), {"team-a-0": (135, 132), **far})
+    b = compute_reward_breakdown(cur, on_point, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
+    assert b.components["team-a-0"]["goal_hold"] == pytest.approx(0.01)
+    assert b.components["team-a-0"]["goal_progress"] == pytest.approx(0.05 * (22.0 - 3.0))
+    back = _placed(_obs(), {"team-a-0": (120, 132), **far})
+    b = compute_reward_breakdown(on_point, back, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
+    assert b.components["team-a-0"]["goal_progress"] == pytest.approx(-0.05 * 9.0)
+
+    # one enemy 15 u from the point (pressure 0.5), one on it (1.0): both controlled agents pay -0.02 x 1.5
+    near = _placed(_obs(), {"team-a-0": (135, 132), "team-b-0": (147, 132), "team-b-1": (132, 132)})
+    b = compute_reward_breakdown(on_point, near, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
+    assert b.components["team-a-0"]["enemy_goal"] == pytest.approx(-0.02 * 1.5)
+    assert b.components["team-a-1"]["enemy_goal"] == pytest.approx(-0.02 * 1.5)
+    # a dead enemy exerts no pressure; the penalty is what killing it removes
+    near_dead = copy.deepcopy(near)
+    near_dead["team-b-1"]["self"]["dead"] = True
+    b = compute_reward_breakdown(on_point, near_dead, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
+    assert b.components["team-a-0"]["enemy_goal"] == pytest.approx(-0.02 * 0.5)
+
+
+def test_goal_terms_stop_for_downed_and_dead_agents():
+    far = {"team-b-0": (300, 300), "team-b-1": (300, 300)}
+    prev = _placed(_obs(), {"team-a-0": (120, 132), **far})
+    downed = _placed(_obs(a0_downed=True), {"team-a-0": (130, 132), **far})
+    b = compute_reward_breakdown(prev, downed, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
+    assert b.components["team-a-0"]["goal_progress"] == 0.0 and b.components["team-a-0"]["goal_hold"] == 0.0
+    dead = _placed(_obs(a0_dead=True), {"team-a-0": (132, 132), "team-b-0": (132, 132), "team-b-1": (300, 300)})
+    b = compute_reward_breakdown(downed, dead, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
+    assert b.totals["team-a-0"] == 0.0  # dead: no progress, no hold, no pressure penalty
+    assert b.components["team-a-1"]["enemy_goal"] == pytest.approx(-0.02)

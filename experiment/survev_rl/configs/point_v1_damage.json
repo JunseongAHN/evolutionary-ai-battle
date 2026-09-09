@@ -1,0 +1,15 @@
+{
+  "_comment": "point_v1 plus an explicit damage_dealt term (the control run for 'does the point penalty alone teach shooting?').",
+  "alive_per_step": 0.0,
+  "hp_delta": 0.0,
+  "damage_dealt": 0.02,
+  "damage_taken": 0.0,
+  "kill": 0.0,
+  "death": 0.0,
+  "team_win": 0.0,
+  "goal_progress": 0.05,
+  "goal_hold": 0.01,
+  "goal_radius": 6.0,
+  "enemy_at_goal": -0.02,
+  "enemy_goal_radius": 30.0
+}

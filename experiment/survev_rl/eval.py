@@ -264,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ticks", type=int, default=None)
     p.add_argument("--time-limit", type=float, default=None)
     p.add_argument("--loadout", default=None, choices=["fists", "armed"], help="override the checkpoint's loadout")
+    p.add_argument("--layout", default=None, choices=["fixed", "random"], help="override the checkpoint's spawn layout")
     p.add_argument("--seed", type=int, default=1000, help="base episode seed (kept apart from training)")
     p.add_argument("--device", default="cpu")
     p.add_argument("--full-obs", action="store_true", help="store full AgentObservations per step")
@@ -299,6 +300,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         time_limit=args.time_limit or float(env_meta.get("time_limit", 60.0)),
         map_size=int(env_meta.get("map_size", 128)),
         loadout=args.loadout or str(env_meta.get("loadout", "fists")),
+        layout=args.layout or str(env_meta.get("layout", "fixed")),
+        goal=tuple(env_meta["goal"]) if env_meta.get("goal") else None,
         base_seed=args.seed,
     )
     feat_cfg = FeaturizerConfig.from_dict(meta.get("featurizer") or {"time_limit": env_cfg.time_limit})

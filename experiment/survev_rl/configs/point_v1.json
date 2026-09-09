@@ -1,0 +1,15 @@
+{
+  "_comment": "v1 'global point' objective (2026-09-09): reach and hold the point, keep enemies away from it. Everything else is 0 on purpose; add terms one at a time. Use with --goal center --layout random.",
+  "alive_per_step": 0.0,
+  "hp_delta": 0.0,
+  "damage_dealt": 0.0,
+  "damage_taken": 0.0,
+  "kill": 0.0,
+  "death": 0.0,
+  "team_win": 0.0,
+  "goal_progress": 0.05,
+  "goal_hold": 0.01,
+  "goal_radius": 6.0,
+  "enemy_at_goal": -0.02,
+  "enemy_goal_radius": 30.0
+}

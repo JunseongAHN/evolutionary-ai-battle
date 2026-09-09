@@ -40,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--map-size", type=int, default=128)
     p.add_argument("--loadout", default="fists", choices=["fists", "armed"],
                    help="curriculum: 'armed' spawns everyone with an ak47 (mock; bridge extension request)")
+    p.add_argument("--layout", default="fixed", choices=["fixed", "random"],
+                   help="spawn geometry: 'random' rotates the spawn axis and draws the distance per seed (bridge)")
+    p.add_argument("--goal", default=None,
+                   help="waypoint 'x,y' or 'center' (132,132); adds the goal block to the observation and enables "
+                        "the waypoint reward terms in --reward-json (goal_progress / goal_hold / enemy_at_goal)")
     p.add_argument("--seed", type=int, default=0, help="torch/numpy seed and base episode seed")
     p.add_argument("--no-validate", action="store_true", help="skip the observation key allowlist")
     # featurizer / actions / rewards
@@ -71,6 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default="runs/ppo_v0")
     p.add_argument("--quiet", action="store_true")
     return p
+
+
+def parse_goal(spec: str | None) -> tuple[float, float] | None:
+    """'center' -> the field center, 'x,y' -> that point, None -> no waypoint."""
+    if spec is None or spec == "":
+        return None
+    if spec == "center":
+        return (132.0, 132.0)
+    x, y = (float(v) for v in spec.split(","))
+    return (x, y)
 
 
 def parse_reward_override(spec: str | None, team_mix: float) -> RewardConfig:
@@ -110,11 +125,14 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         time_limit=args.time_limit,
         map_size=args.map_size,
         loadout=args.loadout,
+        layout=args.layout,
+        goal=parse_goal(args.goal),
         base_seed=args.seed,
         validate=not args.no_validate,
     )
     feat_cfg = FeaturizerConfig(
-        rotate_to_facing=args.rotate_obs, memory=not args.no_memory, time_limit=args.time_limit
+        rotate_to_facing=args.rotate_obs, memory=not args.no_memory, time_limit=args.time_limit,
+        goal=env_cfg.goal is not None,
     )
     action_space = ActionSpace(mode="primitive", assist=not args.no_assist, auto_pickup=args.auto_pickup)
     reward_cfg = parse_reward_override(args.reward_json, args.team_mix)

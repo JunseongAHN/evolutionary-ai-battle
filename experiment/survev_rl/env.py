@@ -43,6 +43,8 @@ class EnvConfig:
     time_limit: float = 60.0
     map_size: int = 128
     loadout: str = "fists"  # "armed" = spawn with an ak47 (curriculum; mock + bridge extension)
+    layout: str = "fixed"  # "random" = seeded spawn rotation/distance (bridge option, see survev-bridge-v0.md)
+    goal: tuple[float, float] | None = None  # waypoint for the goal block / waypoint rewards (world x, y)
     base_seed: int = 0
     env_id_offset: int = 0
     connect_timeout: float = 10.0
@@ -52,11 +54,14 @@ class EnvConfig:
     def to_dict(self) -> dict[str, Any]:
         d = dict(self.__dict__)
         d["controlled"] = list(self.controlled)
+        d["goal"] = list(self.goal) if self.goal is not None else None
         return d
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "EnvConfig":
         kwargs = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        if kwargs.get("goal") is not None:
+            kwargs["goal"] = (float(kwargs["goal"][0]), float(kwargs["goal"][1]))
         if "controlled" in kwargs:
             kwargs["controlled"] = tuple(kwargs["controlled"])
         return cls(**kwargs)
@@ -92,6 +97,8 @@ class SurvevVecEnv:
         step_timeout: float = 120.0,
         validate: bool = True,
         loadout: str = "fists",
+        layout: str = "fixed",
+        goal: tuple[float, float] | None = None,
     ) -> None:
         if n_envs <= 0:
             raise ValueError("n_envs must be >= 1")
@@ -106,6 +113,8 @@ class SurvevVecEnv:
         self.time_limit = float(time_limit)
         self.map_size = int(map_size)
         self.loadout = str(loadout)
+        self.layout = str(layout)
+        self.goal = (float(goal[0]), float(goal[1])) if goal is not None else None
         self.env_id_offset = int(env_id_offset)
         self.seed_fn = seed_fn or default_seed_fn(base_seed, self.n_envs)
         self.featurizer = featurizer or Featurizer(FeaturizerConfig(time_limit=self.time_limit))
@@ -127,6 +136,8 @@ class SurvevVecEnv:
         self._memories: list[dict[str, AgentMemory]] = [{} for _ in range(self.n_envs)]
         self._ep_return = np.zeros(self.n_rows, dtype=np.float64)
         self._ep_len = np.zeros(self.n_rows, dtype=np.int64)
+        self._ep_goal_hold = np.zeros(self.n_rows, dtype=np.int64)  # steps standing within goal_radius
+        self._ep_goal_min = np.full(self.n_rows, np.inf, dtype=np.float64)  # closest approach to the goal
         self._last_seed: list[str | int | None] = [None] * self.n_envs
 
     # -- helpers ---------------------------------------------------------------------------
@@ -145,12 +156,16 @@ class SurvevVecEnv:
 
     def _reset_env(self, i: int) -> ObsMessage:
         seed = self.seed_fn(i, self.episode_index[i])
-        extra = {"loadout": self.loadout} if self.loadout != "fists" else None  # spec options only by default
+        extra: dict[str, Any] = {}  # spec options only by default
+        if self.loadout != "fists":
+            extra["loadout"] = self.loadout
+        if self.layout != "fixed":
+            extra["layout"] = self.layout
         msg = self.client.reset(
             self.env_id(i),
             scenario=self.scenario,
             seed=seed,
-            options=extra,
+            options=extra or None,
             controlled=self.controlled,
             scripted=self.scripted,
             time_limit=self.time_limit,
@@ -169,11 +184,13 @@ class SurvevVecEnv:
             row = i * self.n_controlled + j
             self._ep_return[row] = 0.0
             self._ep_len[row] = 0
+            self._ep_goal_hold[row] = 0
+            self._ep_goal_min[row] = np.inf
         return msg
 
     def _featurize_env(self, i: int, msg: ObsMessage, out: np.ndarray) -> None:
         for j, aid in enumerate(self.controlled):
-            vec = self.featurizer.featurize(msg.obs[aid], msg.t, self._memories[i][aid])
+            vec = self.featurizer.featurize(msg.obs[aid], msg.t, self._memories[i][aid], goal=self.goal)
             row = i * self.n_controlled + j
             out[row, : self.featurizer.size] = vec
             if self.agent_onehot_dim:
@@ -216,7 +233,7 @@ class SurvevVecEnv:
             new = results[self.env_id(i)]
             self.step_messages[i] = new
             breakdown = compute_reward_breakdown(
-                prev.obs, new.obs, new.events, new.info, self.reward_config, self.controlled, t=new.t
+                prev.obs, new.obs, new.events, new.info, self.reward_config, self.controlled, t=new.t, goal=self.goal
             )
             for j, aid in enumerate(self.controlled):
                 row = i * self.n_controlled + j
@@ -234,15 +251,27 @@ class SurvevVecEnv:
                     "reward_components": breakdown.components[aid],
                     "n_events": len(new.events),
                 }
+                if self.goal is not None:
+                    pos = me.get("pos") or {}
+                    d = float(np.hypot(float(pos.get("x", 0.0)) - self.goal[0], float(pos.get("y", 0.0)) - self.goal[1]))
+                    infos[row]["goal_dist"] = d
+                    if not me.get("dead") and not me.get("downed"):
+                        self._ep_goal_min[row] = min(self._ep_goal_min[row], d)
+                        if d <= self.reward_config.goal_radius:
+                            self._ep_goal_hold[row] += 1
             if new.done:
                 metrics = new.info.metrics or {}
                 for j, aid in enumerate(self.controlled):
                     row = i * self.n_controlled + j
                     dones[row] = True
                     m = metrics.get(aid)
+                    ep_metrics = m.as_float_dict() if m is not None else {}
+                    if self.goal is not None:  # waypoint stats ride along with the bridge metrics
+                        ep_metrics["goal_hold_frac"] = float(self._ep_goal_hold[row]) / max(1, int(self._ep_len[row]))
+                        ep_metrics["goal_min_dist"] = float(self._ep_goal_min[row]) if np.isfinite(self._ep_goal_min[row]) else -1.0
                     infos[row].update(
                         {
-                            "episode_metrics": m.as_float_dict() if m is not None else {},
+                            "episode_metrics": ep_metrics,
                             "episode_return": float(self._ep_return[row]),
                             "episode_length": int(self._ep_len[row]),
                             "episode_time": new.t,
@@ -328,6 +357,8 @@ def make_vec_env(
         reward_config=reward_cfg,
         scripted=env_cfg.scripted,
         time_limit=env_cfg.time_limit,
+        layout=env_cfg.layout,
+        goal=env_cfg.goal,
         map_size=env_cfg.map_size,
         base_seed=env_cfg.base_seed,
         env_id_offset=env_cfg.env_id_offset,

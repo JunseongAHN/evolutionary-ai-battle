@@ -115,3 +115,21 @@ def test_featurizes_mock_observations_for_all_agents():
             assert np.abs(v).max() <= 3.0 + 1e-6
             seen_enemy = seen_enemy or v[_idx(f, "en0_present")] == 1.0
     assert seen_enemy
+
+
+def test_goal_block_is_optional_and_egocentric(spec_obs):
+    from experiment.survev_rl.featurizer import Featurizer, FeaturizerConfig
+
+    plain = Featurizer(FeaturizerConfig())
+    goal_f = Featurizer(FeaturizerConfig(goal=True))
+    assert goal_f.size == plain.size + 6
+    assert goal_f.vector_keys[-6:] == ["goal_present", "goal_dx", "goal_dy", "goal_dist", "goal_ux", "goal_uy"]
+    # same prefix as the plain featurizer, goal block zero when no goal is handed in
+    vec = goal_f.featurize(spec_obs, t=1.0)
+    assert vec[: plain.size].tolist() == plain.featurize(spec_obs, t=1.0).tolist()
+    assert vec[-6:].tolist() == [0.0] * 6
+    # self at (106.7, 131.1): a goal 32 u east -> dx = 1 (pos_scale), unit (1, 0)
+    vec = goal_f.featurize(spec_obs, t=1.0, goal=(138.7, 131.1))
+    assert vec[-6:].tolist() == pytest.approx([1.0, 1.0, 0.0, 1.0, 1.0, 0.0])
+    # the plain featurizer ignores a goal argument
+    assert plain.featurize(spec_obs, t=1.0, goal=(138.7, 131.1)).shape == (plain.size,)

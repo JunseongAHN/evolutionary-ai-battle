@@ -339,6 +339,9 @@ class FieldSim:
         self.loadout = str(options.get("loadout", "fists"))  # extension (not in spec v0): "armed"
         if self.loadout not in ("fists", "armed"):
             raise ProtocolError(f"unknown loadout {self.loadout!r}")
+        self.layout = str(options.get("layout", "fixed"))  # accepted for parity; the mock keeps its fixed geometry
+        if self.layout not in ("fixed", "random"):
+            raise ProtocolError(f"unknown layout {self.layout!r}")
         self.rng = random.Random(f"{seed}")
         self.tick = 0
         self.done = False

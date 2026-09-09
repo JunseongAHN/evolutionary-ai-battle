@@ -47,6 +47,8 @@ class CheckpointPolicy:
         meta = dict(ckpt.get("meta") or {})
         env_meta = dict(meta.get("env") or {})
         self.controlled: tuple[str, ...] = tuple(env_meta.get("controlled") or ("team-a-0", "team-a-1"))
+        goal = env_meta.get("goal")
+        self.goal: tuple[float, float] | None = (float(goal[0]), float(goal[1])) if goal else None
         self.featurizer = Featurizer(
             FeaturizerConfig.from_dict(meta.get("featurizer") or {"time_limit": env_meta.get("time_limit", 60.0)})
         )
@@ -79,7 +81,7 @@ class CheckpointPolicy:
             return {}, {}
         x = np.zeros((len(ids), self.obs_dim), dtype=np.float32)
         for row, aid in enumerate(ids):
-            x[row, : self.featurizer.size] = self.featurizer.featurize(obs[aid], t, self.memories[aid])
+            x[row, : self.featurizer.size] = self.featurizer.featurize(obs[aid], t, self.memories[aid], goal=self.goal)
             if self.onehot_dim:
                 x[row, self.featurizer.size + self.controlled.index(aid)] = 1.0
         with torch.no_grad():

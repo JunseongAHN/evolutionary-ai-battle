@@ -20,6 +20,7 @@ gas     7                   active, inside, shrinking, edge distance, new-center
                             new-edge distance
 counts  5                   alive_count/4, alive_teams/2, enemies/K_en, loot/K_loot, bullets/K_bl
 mem     4 x K_en (3)        seen, last dx, last dy, recency = exp(-age / memory_decay_s)
+goal    6 (if goal=True)    present, dx, dy, dist, unit(x,y) of the waypoint handed to featurize()
 ======  ==================  =====================================================================
 
 ``*`` = placeholders (always 0 today) for line-of-sight / cover features once the map has
@@ -95,6 +96,7 @@ class FeaturizerConfig:
     memory: bool = True
     memory_decay_s: float = 10.0
     time_limit: float = 60.0
+    goal: bool = False  # append the waypoint block (goal-conditioned policies); off keeps old checkpoints valid
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -161,6 +163,8 @@ class Featurizer:
         if c.memory:
             for i in range(c.max_enemies):
                 block(f"mem{i}", [f"mem{i}_{n}" for n in ("seen", "dx", "dy", "recency")])
+        if c.goal:
+            block("goal", [f"goal_{n}" for n in ("present", "dx", "dy", "dist", "ux", "uy")])
         return keys, layout
 
     @property
@@ -186,8 +190,13 @@ class Featurizer:
 
     # -- featurization ---------------------------------------------------------------------
     def featurize(
-        self, obs: AgentObservation, t: float = 0.0, memory: AgentMemory | None = None
+        self,
+        obs: AgentObservation,
+        t: float = 0.0,
+        memory: AgentMemory | None = None,
+        goal: tuple[float, float] | None = None,
     ) -> np.ndarray:
+        """``goal`` is the waypoint (world x, y) for the ``goal`` block; ignored unless ``config.goal``."""
         c = self.config
         me = obs["self"]
         sx, sy = float(me["pos"]["x"]), float(me["pos"]["y"])
@@ -357,6 +366,13 @@ class Featurizer:
                     out += [1.0, dx, dy, math.exp(-age / c.memory_decay_s) if c.memory_decay_s > 0 else 1.0]
                 else:
                     out += [0.0] * 4
+        # -- goal (waypoint)
+        if c.goal:
+            if goal is not None:
+                gdx, gdy, gd, gux, guy = rel(float(goal[0]), float(goal[1]), c.pos_scale)
+                out += [1.0, gdx, gdy, gd, gux, guy]
+            else:
+                out += [0.0] * 6
         vec = np.asarray(out, dtype=np.float32)
         if vec.shape[0] != self.size:  # pragma: no cover - layout guard
             raise RuntimeError(f"featurizer produced {vec.shape[0]} values, expected {self.size}")
