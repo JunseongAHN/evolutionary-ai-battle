@@ -289,3 +289,18 @@ def test_armed_loadout_option_is_an_extension(client):
     assert msg.obs["team-a-0"]["self"]["weapon"] == "fists"  # default = spec behaviour
     with pytest.raises(ProtocolError):
         client.reset(0, options={"loadout": "tank"})
+
+
+def test_racer_opponent_takes_points_on_the_mock():
+    from experiment.survev_rl.mock_bridge import FieldSim
+
+    sim = FieldSim(0, seed="racer-mock", options={"scripted": "racer", "controlled": ["team-a-0", "team-a-1"],
+                                                  "objective": {"mode": "race"}, "endOnElimination": False,
+                                                  "timeLimit": 25})
+    captures = 0
+    while not sim.done:
+        msg = sim.step(10)
+        captures += sum(1 for e in msg["events"] if e["type"] == "capture" and e["team"] == "team-b")
+    assert captures >= 2, "racers should keep taking points while team-a idles"
+    assert msg["info"]["objective"]["captures"]["team-b"] == captures
+    assert msg["info"]["reason"] in ("time_limit", "controlled_dead")

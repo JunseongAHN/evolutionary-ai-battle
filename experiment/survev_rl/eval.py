@@ -260,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--episodes", type=int, default=20)
     p.add_argument("--n-envs", type=int, default=1)
     p.add_argument("--controlled", default=None, help="override controlled agents (comma-separated)")
-    p.add_argument("--scripted", default=None, choices=["chaser", "idle"], help="override the checkpoint's opponent")
+    p.add_argument("--scripted", default=None, choices=["chaser", "idle", "racer"], help="override the checkpoint's opponent")
     p.add_argument("--ticks", type=int, default=None)
     p.add_argument("--time-limit", type=float, default=None)
     p.add_argument("--loadout", default=None, choices=["fists", "armed"], help="override the checkpoint's loadout")

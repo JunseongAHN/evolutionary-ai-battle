@@ -335,7 +335,7 @@ class FieldSim:
             raise ProtocolError(f"unknown controlled agent ids {unknown}")
         self.controlled: list[str] = list(controlled)
         self.scripted: str = str(options.get("scripted", "chaser"))
-        if self.scripted not in ("chaser", "idle"):
+        if self.scripted not in ("chaser", "idle", "racer"):
             raise ProtocolError(f"unknown scripted policy {self.scripted!r}")
         self.loadout = str(options.get("loadout", "fists"))  # extension (not in spec v0): "armed"
         if self.loadout not in ("fists", "armed"):
@@ -666,10 +666,10 @@ class FieldSim:
 
     def _tick(self) -> None:
         # scripted agents decide at the human input cadence (every netSync = 3 ticks)
-        if self.scripted == "chaser" and self.tick % 3 == 0:
+        if self.scripted in ("chaser", "racer") and self.tick % 3 == 0:
             for p in self.players.values():
                 if p.id not in self.controlled and not p.dead:
-                    chaser_decide(self, p)
+                    chaser_decide(self, p, race=self.scripted == "racer")
         for p in self.players.values():
             if p.dead:
                 continue
@@ -1069,7 +1069,12 @@ def _toward(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, floa
     return normalize(b[0] - a[0], b[1] - a[1])
 
 
-def chaser_decide(sim: FieldSim, p: SimPlayer) -> None:
+RACER_ENGAGE_DIST = 25.0
+
+
+def chaser_decide(sim: FieldSim, p: SimPlayer, race: bool = False) -> None:
+    """Scripted opponent. ``race=True`` (the bridge's ``racer``): same loot/heal/combat, but it only
+    engages enemies inside ``RACER_ENGAGE_DIST`` and otherwise runs to the shared race point."""
     """Write ``p.held`` (and fire edge inputs) for one decision of the scripted chaser."""
     hw, hh = sim.culling_rect(p)
     visible = [q for q in sim.enemies(p) if not q.dead and in_rect(p.pos, q.pos, hw, hh)]
@@ -1149,7 +1154,13 @@ def chaser_decide(sim: FieldSim, p: SimPlayer) -> None:
         apply()
         return
 
-    # 4) engage
+    # 4) engage (the racer only when the enemy is close enough to matter)
+    racing = race and sim.race and sim.objective_pos is not None
+    if nearest is not None and racing and dist(p.pos, nearest.pos) > RACER_ENGAGE_DIST:
+        held.aim = _toward(p.pos, nearest.pos)
+        held.move = quantize_move(*_toward(p.pos, sim.objective_pos))
+        apply()
+        return
     if nearest is not None:
         d = dist(p.pos, nearest.pos)
         to_enemy = _toward(p.pos, nearest.pos)
@@ -1168,7 +1179,14 @@ def chaser_decide(sim: FieldSim, p: SimPlayer) -> None:
         apply()
         return
 
-    # 5) nothing visible: search (last seen enemy -> regroup -> enemy kit -> random waypoints)
+    # 5) nothing visible: the racer runs to the point; the chaser searches
+    if racing:
+        to_point = _toward(p.pos, sim.objective_pos)
+        if dist(p.pos, sim.objective_pos) > sim.objective_radius * 0.5:
+            held.move = quantize_move(*to_point)
+        held.aim = to_point
+        apply()
+        return
     goal = _search_goal(sim, p, mem)
     if goal is not None:
         held.move = quantize_move(*_toward(p.pos, goal))

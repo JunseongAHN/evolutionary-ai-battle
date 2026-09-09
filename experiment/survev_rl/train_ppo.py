@@ -35,7 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--n-envs", type=int, default=16)
     p.add_argument("--ticks", type=int, default=10, help="game ticks per decision (10 = 0.1 s)")
     p.add_argument("--controlled", default="team-a-0,team-a-1", help="comma-separated agent ids")
-    p.add_argument("--scripted", default="chaser", choices=["chaser", "idle"])
+    p.add_argument("--scripted", default="chaser", choices=["chaser", "idle", "racer"],
+                   help="opponent: chaser hunts, racer goes for the race point and fights only inside 25 u")
     p.add_argument("--time-limit", type=float, default=60.0)
     p.add_argument("--map-size", type=int, default=128)
     p.add_argument("--loadout", default="fists", choices=["fists", "armed"],
