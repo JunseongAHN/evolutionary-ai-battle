@@ -164,6 +164,7 @@ All positions are world coordinates. `dist` is the distance from the observing a
  "dead_bodies": [{"pos": {"x": 130.0, "y": 129.0}, "dist": 23.3}],
  "gas": {"mode": 0, "rad": 196, "pos": {"x": 132, "y": 132}, "rad_new": 196,
          "pos_new": {"x": 132, "y": 132}},
+ "shots_heard": [{"dir": "NE", "range": "mid"}],
  "alive_count": 4, "alive_teams": 2}
 ```
 
@@ -179,6 +180,14 @@ Rules
   "radius": 4, "dist": 27.5}` — the same point for every agent (a shared HUD marker), `dist` from the
   observing agent.
 - `hp` is 0–100. A downed player's HP is reset to 100 by the engine and then bleeds.
+- `shots_heard` holds the shots *other* players fired during this step that this agent is close
+  enough to hear, bucketed into one of 8 compass points and near / mid / far. The radius is 48 u,
+  taken from the client's own audio: another player's shot plays on the `otherPlayers` channel whose
+  `maxRange` is 48 (default `rangeMult` 1). It reaches past the view rectangle (zoom 28 -> 32 u
+  half-width), which is exactly why it is a separate channel — an agent hears fights it cannot see.
+  Agents further away than 48 u get an empty list, and you never hear your own shots. `dir` is
+  **world** space, where y grows upward (`"N"` = +y), not screen space. It is a snapshot of the step,
+  not a running log: a quiet step gives `[]`.
 - `action` is the engine's `GameConfig.Action` enum (0 none, 1 reload, 2 useItem, 3 revive).
 - Keys are an allowlist: a server-side test fails if any other key appears (M6).
 
@@ -196,10 +205,23 @@ Rules
 {"type": "capture", "t": 4.3, "agent": "team-a-1", "team": "team-a", "index": 0, "pos": {"x": 150.2, "y": 118.7}, "time_to_capture": 4.3}
 ```
 
+```json
+{"type": "loot",   "t": 0.5,  "agent": "team-a-0", "item": "ak47", "count": 1, "pos": {"x": 107.0, "y": 129.1}}
+{"type": "heal",   "t": 12.4, "agent": "team-a-0", "item": "bandage", "hp_before": 50, "hp_after": 65, "boost_before": 0, "boost_after": 0}
+{"type": "revive", "t": 21.7, "agent": "team-a-1", "source": "team-a-0"}
+```
+
+`loot` is emitted only when the pickup actually changed the player's holdings (the engine destroys
+the pile and re-drops whatever did not fit, so a refused pickup — inventory full, already owned,
+better item equipped — produces no event); `count` is the pile's count, not necessarily the amount
+taken. `heal` fires when the item is *consumed*, i.e. when the use action completes, and covers both
+heals (`bandage`, `healthkit`: hp changes) and boosts (`soda`, `painkiller`: boost changes).
+`revive` names the revived teammate as `agent` and the reviver as `source`, like `down` / `kill`.
+
 `amount` is HP actually removed (after armor); a downing or killing hit removes everything that
 was left. `capture` (race objective only) names the agent that touched the point first and its team;
-credit is per team on the Python side. Later additions (same shape, new `type`s): `loot`, `heal`,
-`revive`, `shots_heard`.
+credit is per team on the Python side. Heard shots are not events: they are per agent, so they live
+in the observation (`obs.shots_heard`, below).
 
 ### metrics (in `info.metrics` when `done`)
 

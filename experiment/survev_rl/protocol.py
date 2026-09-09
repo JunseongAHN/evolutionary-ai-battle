@@ -316,6 +316,17 @@ class ObjectiveView(TypedDict):
     dist: float
 
 
+class ShotHeard(TypedDict):
+    """One other player's shot within earshot (48 u), bucketed by the server.
+
+    ``dir`` is one of the 8 compass points in *world* space, where y grows upward
+    (``"N"`` = +y), not screen space. ``range`` splits the audible radius into thirds.
+    """
+
+    dir: str
+    range: str
+
+
 class AgentObservation(TypedDict, total=False):
     self: SelfState
     teammates: list[TeammateView]
@@ -328,6 +339,7 @@ class AgentObservation(TypedDict, total=False):
     alive_count: int
     alive_teams: int
     objective: ObjectiveView | None  # race mode only; null / absent otherwise
+    shots_heard: list[ShotHeard]  # other players' shots of the step; heard-only, not featurized
 
 
 # Allowlist (M6). Keys not listed here make ``validate_agent_observation`` raise.
@@ -345,6 +357,7 @@ ALLOWED_KEYS: dict[str, frozenset[str]] = {
     "dead_bodies[]": frozenset(DeadBodyView.__annotations__),
     "gas": frozenset(GasView.__annotations__),
     "objective": frozenset(ObjectiveView.__annotations__),
+    "shots_heard[]": frozenset(ShotHeard.__annotations__),
 }
 _VEC2_FIELDS: dict[str, tuple[str, ...]] = {
     "self": ("pos", "dir"),
@@ -355,8 +368,9 @@ _VEC2_FIELDS: dict[str, tuple[str, ...]] = {
     "bullets[]": ("pos", "dir"),
     "dead_bodies[]": ("pos",),
     "gas": ("pos", "pos_new"),
+    "shots_heard[]": (),
 }
-_LIST_FIELDS = ("teammates", "players", "loot", "obstacles", "bullets", "dead_bodies")
+_LIST_FIELDS = ("teammates", "players", "loot", "obstacles", "bullets", "dead_bodies", "shots_heard")
 
 
 def _check_keys(obj: Mapping[str, Any], allowed: frozenset[str], where: str) -> None:
@@ -413,7 +427,7 @@ EventType = Literal["fire", "damage", "down", "kill", "capture", "loot", "heal",
 
 
 class Event(TypedDict, total=False):
-    """fire / damage / down / kill / capture (later: loot, heal, revive, shots_heard)."""
+    """fire / damage / down / kill / capture / loot / heal / revive (shots_heard is per-agent in obs)."""
 
     type: str
     t: float
@@ -427,6 +441,11 @@ class Event(TypedDict, total=False):
     hp_after: float
     downed: bool
     dead: bool
+    # loot: the picked-up item and the pile's count. heal: the consumed item and the boost change
+    item: str
+    count: int
+    boost_before: float
+    boost_after: float
     # capture (race objective): the capturing agent's team, the point index, seconds the point was up
     team: str
     index: int
