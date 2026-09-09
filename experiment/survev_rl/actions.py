@@ -14,6 +14,10 @@ slot but fists are equipped, and ``Reload`` when the equipped gun's clip is empt
 reserve ammo exists). It only ever *adds* inputs; the four policy dimensions are untouched.
 ``auto_pickup=True`` (off by default, curriculum aid) additionally presses ``Interact``
 whenever loot is within pickup range, making the ``interact`` dimension redundant.
+``aim_assist=True`` (off by default) is the one exception to "dimensions untouched": while
+``fire`` is held and an enemy is visible, the aim is replaced by the direction to the nearest
+standing enemy — the same exact aim the scripted opponents have, so the policy's job becomes
+*when* to shoot / loot / run rather than hitting a 22.5-degree bin at range.
 
 Skill mode is ``Discrete(len(SKILLS))`` over named skills (``move_to_partner``,
 ``loot_nearest``, ``engage``, ``retreat``, ``take_cover``, ``revive``, ``hold``) producing
@@ -56,6 +60,7 @@ class ActionSpace:
     mode: ActionMode = "primitive"
     assist: bool = True
     auto_pickup: bool = False  # assist extra: press Interact whenever loot is within reach
+    aim_assist: bool = False  # while fire is held, aim at the nearest visible standing enemy
 
     # -- shape --------------------------------------------------------------------------
     @property
@@ -94,6 +99,9 @@ class ActionSpace:
         move_bin, aim_bin, fire, interact = self.validate(action)
         mx, my = MOVE_VECTORS[move_bin]
         aim = aim_bin_to_vec(aim_bin, AIM_BINS)
+        aim_xy = (float(aim["x"]), float(aim["y"]))
+        if self.aim_assist and fire and obs is not None:
+            aim_xy = aim_at_enemy(obs) or aim_xy
         inputs: list[str | int] = []
         if interact:
             inputs.append("Interact")
@@ -101,7 +109,7 @@ class ActionSpace:
             inputs.extend(assist_inputs(obs, auto_pickup=self.auto_pickup, already=inputs))
         return CpcAction(
             move=(float(mx), float(my)) if (mx or my) else None,
-            aim=(float(aim["x"]), float(aim["y"])),
+            aim=aim_xy,
             fire_start=False,
             fire_hold=bool(fire),
             inputs=inputs,
@@ -133,6 +141,28 @@ class ActionSpace:
 # assist layer
 # --------------------------------------------------------------------------------------
 PICKUP_RANGE = 2.0
+
+
+def aim_at_enemy(obs: AgentObservation) -> tuple[float, float] | None:
+    """Unit vector to the nearest visible enemy (standing before downed); ``None`` when none is visible."""
+    me = obs["self"]
+    team = me.get("team")
+    best: tuple[tuple[int, float], Any] | None = None
+    for p in obs.get("players") or []:
+        if p.get("dead") or (team is not None and p.get("team") == team):
+            continue
+        key = (1 if p.get("downed") else 0, float(p.get("dist", math.inf)))
+        if best is None or key < best[0]:
+            best = (key, p)
+    if best is None:
+        return None
+    my_pos, pos = me.get("pos") or {}, best[1].get("pos") or {}
+    dx = float(pos.get("x", 0.0)) - float(my_pos.get("x", 0.0))
+    dy = float(pos.get("y", 0.0)) - float(my_pos.get("y", 0.0))
+    norm = math.hypot(dx, dy)
+    if norm < 1e-6:
+        return None
+    return (dx / norm, dy / norm)
 
 
 def assist_inputs(

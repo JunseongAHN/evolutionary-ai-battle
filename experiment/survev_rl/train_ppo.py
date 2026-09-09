@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--objective-dist", default="30,70", help="min,max distance between consecutive points")
     p.add_argument("--end-on-elimination", action="store_true",
                    help="with --objective race: still end the episode when one team is left (default: keep racing)")
+    p.add_argument("--opp-aim-noise", type=float, default=0.0,
+                   help="opponent strength: std-dev in degrees of the scripted bots' aim error (bridge scriptedOptions)")
+    p.add_argument("--opp-reaction", type=float, default=0.0,
+                   help="opponent strength: seconds an enemy must be inside 30 u before the bots open fire")
+    p.add_argument("--opp-engage-dist", type=float, default=None,
+                   help="opponent strength: racer break-off distance in u (default 25)")
     p.add_argument("--seed", type=int, default=0, help="torch/numpy seed and base episode seed")
     p.add_argument("--no-validate", action="store_true", help="skip the observation key allowlist")
     # featurizer / actions / rewards
@@ -60,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-memory", action="store_true", help="disable last-seen enemy memory features")
     p.add_argument("--no-assist", action="store_true", help="disable the equip/reload assist layer")
     p.add_argument("--auto-pickup", action="store_true", help="assist extra: Interact whenever loot is in reach")
+    p.add_argument("--aim-assist", action="store_true",
+                   help="while fire is held, aim at the nearest visible enemy (the exact aim the scripted bots have)")
     p.add_argument("--team-mix", type=float, default=0.0, help="blend factor with team-mean reward [0,1]")
     p.add_argument("--reward-json", default=None, help="JSON file/inline overriding RewardConfig fields")
     # ppo
@@ -103,6 +111,17 @@ def parse_objective(args: argparse.Namespace) -> dict[str, Any] | None:
     return {"mode": args.objective, "radius": float(args.objective_radius), "minDist": lo, "maxDist": hi}
 
 
+def parse_scripted_options(args: argparse.Namespace) -> dict[str, Any] | None:
+    opts: dict[str, Any] = {}
+    if args.opp_aim_noise > 0:
+        opts["aimNoiseDeg"] = float(args.opp_aim_noise)
+    if args.opp_reaction > 0:
+        opts["reactionDelay"] = float(args.opp_reaction)
+    if args.opp_engage_dist is not None:
+        opts["engageDist"] = float(args.opp_engage_dist)
+    return opts or None
+
+
 def parse_reward_override(spec: str | None, team_mix: float) -> RewardConfig:
     data: dict[str, Any] = {}
     if spec:
@@ -144,6 +163,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         goal=parse_goal(args.goal),
         objective=parse_objective(args),
         end_on_elimination=args.objective == "none" or args.end_on_elimination,
+        scripted_options=parse_scripted_options(args),
         base_seed=args.seed,
         validate=not args.no_validate,
     )
@@ -151,7 +171,9 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         rotate_to_facing=args.rotate_obs, memory=not args.no_memory, time_limit=args.time_limit,
         goal=env_cfg.goal is not None or env_cfg.objective is not None,
     )
-    action_space = ActionSpace(mode="primitive", assist=not args.no_assist, auto_pickup=args.auto_pickup)
+    action_space = ActionSpace(
+        mode="primitive", assist=not args.no_assist, auto_pickup=args.auto_pickup, aim_assist=args.aim_assist
+    )
     reward_cfg = parse_reward_override(args.reward_json, args.team_mix)
     ppo_cfg = PPOConfig(
         total_steps=args.total_steps,
@@ -178,7 +200,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         "env": env_cfg.to_dict(),
         "featurizer": feat_cfg.to_dict(),
         "action_space": {"mode": action_space.mode, "assist": action_space.assist,
-                         "auto_pickup": action_space.auto_pickup},
+                         "auto_pickup": action_space.auto_pickup, "aim_assist": action_space.aim_assist},
         "reward": reward_cfg.to_dict(),
         "vector_keys": env.vector_keys,
         "obs_dim": env.obs_dim,

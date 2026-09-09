@@ -304,3 +304,34 @@ def test_racer_opponent_takes_points_on_the_mock():
     assert captures >= 2, "racers should keep taking points while team-a idles"
     assert msg["info"]["objective"]["captures"]["team-b"] == captures
     assert msg["info"]["reason"] in ("time_limit", "controlled_dead")
+
+
+def test_scripted_options_weaken_the_mock_opponents(client):
+    def run(options):
+        msg = client.reset(0, seed="cpc-duo2v2-seed-0", controlled=["team-a-0", "team-a-1"], scripted="chaser",
+                           time_limit=30.0, options=options)
+        shots = hits = 0
+        first_fire = None
+        while not msg.done:
+            msg = client.step(0, {}, ticks=10)
+            for e in msg.events:
+                if e["type"] == "fire" and e["agent"].startswith("team-b"):
+                    shots += 1
+                    first_fire = e["t"] if first_fire is None else first_fire
+                if e["type"] == "damage" and str(e.get("source", "")).startswith("team-b"):
+                    hits += 1
+        return shots, hits, first_fire, msg
+
+    exact_shots, exact_hits, exact_first, exact_msg = run(None)
+    assert exact_shots > 0 and exact_msg.info.reason == "elimination"
+    # a huge reaction delay: contact never lasts long enough -> no shots, the idle team survives to the limit
+    shots, hits, first, msg = run({"scriptedOptions": {"reactionDelay": 100.0}})
+    assert shots == 0 and hits == 0 and msg.info.reason == "time_limit"
+    # a 2 s delay: first shot at least ~2 s later than with exact bots
+    shots, _, first, _ = run({"scriptedOptions": {"reactionDelay": 2.0}})
+    assert shots > 0 and first >= exact_first + 1.8
+    # heavy aim noise: fewer hits per shot
+    shots, hits, _, _ = run({"scriptedOptions": {"aimNoiseDeg": 60.0}})
+    assert shots > 0 and hits / shots < 0.6 * (exact_hits / exact_shots)
+    with pytest.raises(Exception):
+        client.reset(0, options={"scriptedOptions": {"accuracy": 1.0}})

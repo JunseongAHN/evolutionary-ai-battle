@@ -352,6 +352,14 @@ class FieldSim:
         self.objective_max = float(objective.get("maxDist", 70.0))
         self.objective_margin = float(objective.get("margin", 12.0))
         self.end_on_elimination = bool(options.get("endOnElimination", True))
+        # opponent strength (bridge scriptedOptions): aim noise, reaction delay, racer engage distance
+        scripted_options = dict(options.get("scriptedOptions") or {})
+        unknown = set(scripted_options) - {"aimNoiseDeg", "reactionDelay", "engageDist"}
+        if unknown:
+            raise ProtocolError(f"unknown scriptedOptions {sorted(unknown)}")
+        self.aim_noise_deg = float(scripted_options.get("aimNoiseDeg", 0.0))
+        self.reaction_delay = float(scripted_options.get("reactionDelay", 0.0))
+        self.engage_dist = float(scripted_options.get("engageDist", RACER_ENGAGE_DIST))
         self.rng = random.Random(f"{seed}")
         self.objective_rng = random.Random(f"{seed}/objective")
         self.objective_index = 0
@@ -1156,7 +1164,13 @@ def chaser_decide(sim: FieldSim, p: SimPlayer, race: bool = False) -> None:
 
     # 4) engage (the racer only when the enemy is close enough to matter)
     racing = race and sim.race and sim.objective_pos is not None
-    if nearest is not None and racing and dist(p.pos, nearest.pos) > RACER_ENGAGE_DIST:
+    # reaction clock: game time since an enemy first came inside the fire range (reset when none is)
+    if nearest is not None and dist(p.pos, nearest.pos) <= CHASER_FIRE_DIST:
+        mem.setdefault("contact_since", sim.t)
+    else:
+        mem.pop("contact_since", None)
+    reacted = sim.reaction_delay <= 0 or sim.t - mem.get("contact_since", sim.t) >= sim.reaction_delay
+    if nearest is not None and racing and dist(p.pos, nearest.pos) > sim.engage_dist:
         held.aim = _toward(p.pos, nearest.pos)
         held.move = quantize_move(*_toward(p.pos, sim.objective_pos))
         apply()
@@ -1165,7 +1179,10 @@ def chaser_decide(sim: FieldSim, p: SimPlayer, race: bool = False) -> None:
         d = dist(p.pos, nearest.pos)
         to_enemy = _toward(p.pos, nearest.pos)
         held.aim = to_enemy
-        if p.cur_gun is not None and d <= CHASER_FIRE_DIST and (p.clip() > 0 or p.reserve() > 0):
+        if sim.aim_noise_deg > 0:
+            angle = math.atan2(to_enemy[1], to_enemy[0]) + math.radians(sim.rng.gauss(0.0, sim.aim_noise_deg))
+            held.aim = (math.cos(angle), math.sin(angle))
+        if p.cur_gun is not None and d <= CHASER_FIRE_DIST and reacted and (p.clip() > 0 or p.reserve() > 0):
             held.fire_hold = True
         if d > CHASER_APPROACH_DIST:
             held.move = quantize_move(*to_enemy)

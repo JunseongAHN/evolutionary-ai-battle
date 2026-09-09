@@ -1,8 +1,8 @@
 """Evaluate a PPO checkpoint (or a random baseline) against the scripted chaser.
 
-Prints win rate / mean survival_time / hp_mean / hp_end / damage dealt & taken over N
-episodes and writes one JSONL record per episode (obs summaries, raw + CpcAction actions,
-rewards, events, per-agent metrics). Rewards are logged for reference only: evaluation is
+Prints win rate / mean survival_time / hp_mean / hp_end / damage dealt & taken (plus captures
+and the armed rate when the run has them) over N episodes and writes one JSONL record per
+episode (obs summaries, raw + CpcAction actions, rewards, events, per-agent metrics, pickup stats). Rewards are logged for reference only: evaluation is
 the metric vector (harness convention).
 
 Examples::
@@ -40,7 +40,11 @@ SUMMARY_KEYS: tuple[str, ...] = (
     "hits_given",
     "downed_time",
     "partner_survival_time",
+    "captures",
+    "team_captures",
 )
+# per-agent stats the env computes (not bridge metrics): gun_pickup_time (-1 = never), armed (0/1)
+PICKUP_KEYS: tuple[str, ...] = ("gun_pickup_time", "armed")
 
 
 def obs_summary(obs: AgentObservation) -> dict[str, Any]:
@@ -130,6 +134,11 @@ def run_episodes(
             if dones[env.row_index(i, env.controlled[0])]:
                 info = infos[env.row_index(i, env.controlled[0])]
                 metrics = {aid: m.to_json() for aid, m in (new.info.metrics or {}).items()}
+                pickup = {
+                    aid: {k: float(v) for k, v in (infos[env.row_index(i, aid)].get("episode_metrics") or {}).items()
+                          if k in PICKUP_KEYS}
+                    for aid in env.controlled
+                }
                 record = {
                     "episode": episode_counter,
                     "env_id": env.env_id(i),
@@ -145,6 +154,7 @@ def run_episodes(
                     "team_win": bool(info.get("team_win", False)),
                     "episode_return": dict(partial[i]["returns"]),
                     "metrics": metrics,
+                    "pickup": pickup,
                     "steps": partial[i]["steps"],
                 }
                 episode_counter += 1
@@ -169,12 +179,21 @@ def summarize(records: Sequence[Mapping[str, Any]], controlled: Sequence[str]) -
     )
     per_agent: dict[str, dict[str, float]] = {}
     for aid in controlled:
-        per_agent[aid] = {
-            k: statistics.fmean(float(r["metrics"][aid][k]) for r in records if aid in r["metrics"])
+        vals = {
+            k: [float(r["metrics"][aid][k]) for r in records if aid in r["metrics"] and k in r["metrics"][aid]]
             for k in SUMMARY_KEYS
         }
+        per_agent[aid] = {k: statistics.fmean(v) for k, v in vals.items() if v}  # keys absent from old records are skipped
     out["per_agent"] = per_agent
-    out["mean"] = {k: statistics.fmean(per_agent[aid][k] for aid in controlled) for k in SUMMARY_KEYS}
+    keys = [k for k in SUMMARY_KEYS if all(k in per_agent[aid] for aid in controlled)]
+    out["mean"] = {k: statistics.fmean(per_agent[aid][k] for aid in controlled) for k in keys}
+    # env pickup stats (records written before the "pickup" field lack them)
+    pickups = [r["pickup"][aid] for r in records for aid in controlled if aid in (r.get("pickup") or {})]
+    armed = [float(p["armed"]) for p in pickups if "armed" in p]
+    if armed:
+        out["armed_rate"] = statistics.fmean(armed)
+        times = [float(p["gun_pickup_time"]) for p in pickups if float(p.get("gun_pickup_time", -1.0)) >= 0]
+        out["gun_pickup_time_median"] = statistics.median(times) if times else None
     return out
 
 
@@ -192,6 +211,13 @@ def print_summary(summary: Mapping[str, Any]) -> None:
         f"damage_dealt: {m['damage_dealt']:.1f}  damage_taken: {m['damage_taken']:.1f}  "
         f"kills: {m['kills']:.2f}  shots: {m['shots']:.1f}  hits: {m['hits_given']:.1f}"
     )
+    if "team_captures" in m or "armed_rate" in summary:
+        pickup_t = summary.get("gun_pickup_time_median")
+        print(
+            f"captures: {m.get('captures', float('nan')):.2f}  team_captures: {m.get('team_captures', float('nan')):.2f}  "
+            f"armed_rate: {summary.get('armed_rate', float('nan')):.2f}  "
+            f"gun_pickup_median: {'-' if pickup_t is None else f'{pickup_t:.1f}s'}"
+        )
     for aid, vals in summary["per_agent"].items():
         print(
             f"  {aid}: survival {vals['survival_time']:.2f}s hp_mean {vals['hp_mean']:.1f} "
@@ -265,11 +291,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--time-limit", type=float, default=None)
     p.add_argument("--loadout", default=None, choices=["fists", "armed"], help="override the checkpoint's loadout")
     p.add_argument("--layout", default=None, choices=["fixed", "random"], help="override the checkpoint's spawn layout")
+    p.add_argument("--opp-aim-noise", type=float, default=None, help="override the opponents' aim noise (degrees)")
+    p.add_argument("--opp-reaction", type=float, default=None, help="override the opponents' reaction delay (s)")
+    p.add_argument("--opp-engage-dist", type=float, default=None, help="override the racer's engage distance (u)")
+    p.add_argument("--opp-exact", action="store_true", help="drop the checkpoint's scriptedOptions (exact bots)")
     p.add_argument("--seed", type=int, default=1000, help="base episode seed (kept apart from training)")
     p.add_argument("--device", default="cpu")
     p.add_argument("--full-obs", action="store_true", help="store full AgentObservations per step")
     p.add_argument("--out", default=None, help="JSONL output path (one record per episode)")
     return p
+
+
+def scripted_options_from(args: argparse.Namespace, trained: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Opponent strength for the eval: the checkpoint's, unless overridden (or reset with --opp-exact)."""
+    opts: dict[str, Any] = {} if args.opp_exact else dict(trained or {})
+    if args.opp_aim_noise is not None:
+        opts["aimNoiseDeg"] = float(args.opp_aim_noise)
+    if args.opp_reaction is not None:
+        opts["reactionDelay"] = float(args.opp_reaction)
+    if args.opp_engage_dist is not None:
+        opts["engageDist"] = float(args.opp_engage_dist)
+    return {k: v for k, v in opts.items() if v} or None
 
 
 def main(argv: list[str] | None = None) -> dict[str, Any]:
@@ -304,12 +346,14 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         goal=tuple(env_meta["goal"]) if env_meta.get("goal") else None,
         objective=env_meta.get("objective"),
         end_on_elimination=bool(env_meta.get("end_on_elimination", True)),
+        scripted_options=scripted_options_from(args, env_meta.get("scripted_options")),
         base_seed=args.seed,
     )
     feat_cfg = FeaturizerConfig.from_dict(meta.get("featurizer") or {"time_limit": env_cfg.time_limit})
     as_meta = meta.get("action_space") or {}
     action_space = ActionSpace(
-        mode=as_meta.get("mode", "primitive"), assist=as_meta.get("assist", True), auto_pickup=as_meta.get("auto_pickup", False)
+        mode=as_meta.get("mode", "primitive"), assist=as_meta.get("assist", True),
+        auto_pickup=as_meta.get("auto_pickup", False), aim_assist=as_meta.get("aim_assist", False),
     )
     reward_cfg = RewardConfig.from_dict(meta.get("reward") or {})
     env = make_vec_env(env_cfg, feat_cfg, action_space, reward_cfg)

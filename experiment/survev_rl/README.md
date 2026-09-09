@@ -74,7 +74,8 @@ several bridge processes (one per core) and one training process per bridge, or 
 | `--bridge` / `--mock` / `--mock-port` | `ws://127.0.0.1:8765` | bridge URL, or start the mock in-process |
 | `--n-envs` | 16 | envs on one connection (batched step) |
 | `--ticks` | 10 | game ticks per decision (1 tick = 0.01 s; 10 = 0.1 s policy cadence) |
-| `--controlled` | `team-a-0,team-a-1` | agents driven by the policy; the rest use `--scripted` (`chaser`/`idle`) |
+| `--controlled` | `team-a-0,team-a-1` | agents driven by the policy; the rest use `--scripted` (`chaser`/`racer`/`idle`) |
+| `--opp-aim-noise` / `--opp-reaction` / `--opp-engage-dist` | 0 / 0 / 25 | opponent strength (reset option `scriptedOptions`, bridge + mock): std-dev in degrees of the bots' aim error, seconds an enemy must sit inside their 30 u fire range before they shoot, racer break-off distance. Stored in the checkpoint meta; `eval` reuses it unless overridden (`--opp-exact` drops it) |
 | `--time-limit` / `--map-size` | 60 / 128 | reset options |
 | `--loadout` | `fists` | `armed` spawns everyone with an ak47 + 90 rounds (curriculum). Reset option `loadout` (bridge + mock) |
 | `--layout` | `fixed` | `random` rotates the spawn axis and draws the duo-to-center distance from [24, 44] u per seed (reset option `layout`, bridge; the mock accepts it but keeps its fixed geometry). Use it for any training run: on the fixed layout PPO learned to aim at the constant spawn direction |
@@ -82,7 +83,7 @@ several bridge processes (one per core) and one training process per bridge, or 
 | `--seed` | 0 | torch/numpy seed and base of the episode seeds (`cpc-duo2v2-seed-<base+env+n_envs*episode>`) |
 | `--rotate-obs` | off | egocentric rotation into the facing frame (see featurizer) |
 | `--no-memory` | off | drop the last-seen enemy memory block |
-| `--no-assist` / `--auto-pickup` | assist on / pickup off | assist layer switches (see actions) |
+| `--no-assist` / `--auto-pickup` / `--aim-assist` | assist on / pickup off / aim off | assist layer switches (see actions). `--aim-assist` replaces the aim with the direction to the nearest visible standing enemy while `fire` is held — the same exact aim the scripted bots have (16 absolute 22.5° bins gave 6–12 % hits per shot against their 60–70 %, and 0 kills in every run) |
 | `--team-mix` | 0.0 | blend own reward with the team-mean reward |
 | `--reward-json` | – | JSON file or inline JSON overriding `RewardConfig` fields |
 | `--total-steps --rollout-steps --minibatches --epochs --lr --gamma --gae-lambda --clip --ent-coef --vf-coef --max-grad-norm --target-kl --hidden` | 2M / 128 / 4 / 4 / 3e-4 / 0.99 / 0.95 / 0.2 / 0.01 / 0.5 / 0.5 / none / 256 | PPO |
@@ -92,8 +93,12 @@ several bridge processes (one per core) and one training process per bridge, or 
 Outputs in `--out`: `config.json`, `progress.csv` + `log.jsonl` (per update: losses,
 `approx_kl`, `clip_fraction`, `explained_variance`, and the window of episode metrics:
 `win_rate`, `episode_return`, `survival_time`, `hp_mean`, `hp_end`, `damage_dealt`,
-`damage_taken`, `kills`, ...), `episodes.jsonl` (one line per finished episode per agent),
-`checkpoint_latest.pt` / `checkpoint_final.pt` (state dicts + all configs + `vector_keys`).
+`damage_taken`, `kills`, ..., `captures`, `team_captures`, `armed`), `episodes.jsonl` (one line per
+finished episode per agent, plus `gun_pickup_time`, -1 = never held a gun), `checkpoint_latest.pt` /
+`checkpoint_final.pt` (state dicts + all configs + `vector_keys`). The console line shows
+`tcap` (team captures) and `armed` (share of agents that held a gun) next to survival and return.
+`eval.py` prints and stores (`*.summary.json`) `captures`, `team_captures`, `armed_rate` and the
+median `gun_pickup_time` in addition to the metric vector.
 
 ### `FeaturizerConfig`
 
@@ -352,6 +357,35 @@ term names it (race: `capture`; farm: `gun_pickup`; fight: `damage_dealt` once a
 600k-step run on two CPU cores has shown yet is the *composition* farm -> fight -> race. Next: the
 `race_v2` configuration for 3-5M steps on the GPU box (one bridge process per core, `--n-envs 16`
 each, seeds 1-4), then `--resume` it against `racer` without `--auto-pickup`.
+
+## Aim assist + opponent strength (2026-09-10, run K0 pilot)
+
+Why 600k-step runs never composed farm -> fight -> race: **kills were 0 in every run**. The policy aims
+with 16 absolute 22.5° bins (at 15 u one bin is ±2.9 u of lateral error against a 1 u body: 6–12 %
+hits per shot in E/G/J) while the scripted bots aim exactly (60–70 %), so a duel is lost at any step
+count and the credit path "kill -> uncontested points" is never experienced. Two knobs close that
+gap without touching the reward: `--aim-assist` (while `fire` is held the aim snaps to the nearest
+visible standing enemy — the bots' own primitive, so learning is about *when* to shoot/loot/run) and
+`scriptedOptions` on the bridge (`--opp-aim-noise`, `--opp-reaction`, `--opp-engage-dist`), which
+weaken the bots for a curriculum: chasers vs two idle targets kill both in 6.1 s exact, 8.6 s at 5°,
+14.3 s at 10°, 25.6 s at 20°, not within 30 s at 60°.
+
+Pilot K0: `race_v2`, random layout, racer opponent at `--opp-aim-noise 10`, `--auto-pickup
+--aim-assist`, 300k steps, 8 envs, 2 CPU cores (3.5 min). Compared with run J at the same 300k:
+
+| | J (no assist, exact racer) @300k | K0 (aim assist, racer 10°) @300k | K0 eval vs 10° racer (24 ep) | K0 eval vs exact racer |
+|---|---|---|---|---|
+| survival | 11.4 s | 24.4 s | 22.3 s | 13.5 s |
+| damage dealt / agent | 3.5 | 48 | 72 | 49 |
+| hits per shot | 0.07 | 0.25 | 0.25 | 0.26 |
+| kills / agent | 0 | 0.18 | 0.29 | 0.15 |
+| armed | – | 0.67 | 0.75 (median 1.6 s) | 0.75 |
+| team captures | 0.04 | 0.15 | 0.12 (racers 1.1) | 0.08 (racers 1.2) |
+
+First non-zero kills in the project; a quarter of the episodes now reach the time limit. Racing is
+still absent at 300k — with a reachable `damage_dealt` stream the rare `capture` (+1 after a 3–5 s run
+under fire) is not yet worth it — which is exactly the question the 4M-step GPU runs should answer
+(`docs/cpc-handoff-gpu.md`). Checkpoint: `runs/race_v2_aim_pilot`.
 
 ## Interpretations of the spec made here (to align with the bridge)
 

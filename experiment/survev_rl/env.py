@@ -47,6 +47,7 @@ class EnvConfig:
     goal: tuple[float, float] | None = None  # fixed waypoint for the goal block / waypoint rewards (world x, y)
     objective: dict[str, Any] | None = None  # e.g. {"mode": "race", "radius": 4, "minDist": 30, "maxDist": 70}
     end_on_elimination: bool = True  # False: run to the time limit after a wipe (race), end when controlled agents are dead
+    scripted_options: dict[str, Any] | None = None  # opponent strength: {"aimNoiseDeg", "reactionDelay", "engageDist"}
     base_seed: int = 0
     env_id_offset: int = 0
     connect_timeout: float = 10.0
@@ -103,6 +104,7 @@ class SurvevVecEnv:
         goal: tuple[float, float] | None = None,
         objective: Mapping[str, Any] | None = None,
         end_on_elimination: bool = True,
+        scripted_options: Mapping[str, Any] | None = None,
     ) -> None:
         if n_envs <= 0:
             raise ValueError("n_envs must be >= 1")
@@ -121,6 +123,7 @@ class SurvevVecEnv:
         self.goal = (float(goal[0]), float(goal[1])) if goal is not None else None
         self.objective = dict(objective) if objective else None
         self.end_on_elimination = bool(end_on_elimination)
+        self.scripted_options = dict(scripted_options) if scripted_options else None
         self.env_id_offset = int(env_id_offset)
         self.seed_fn = seed_fn or default_seed_fn(base_seed, self.n_envs)
         self.featurizer = featurizer or Featurizer(FeaturizerConfig(time_limit=self.time_limit))
@@ -172,6 +175,8 @@ class SurvevVecEnv:
             extra["objective"] = dict(self.objective)
         if not self.end_on_elimination:
             extra["endOnElimination"] = False
+        if self.scripted_options:
+            extra["scriptedOptions"] = dict(self.scripted_options)
         msg = self.client.reset(
             self.env_id(i),
             scenario=self.scenario,
@@ -377,6 +382,7 @@ def make_vec_env(
         goal=env_cfg.goal,
         objective=env_cfg.objective,
         end_on_elimination=env_cfg.end_on_elimination,
+        scripted_options=env_cfg.scripted_options,
         map_size=env_cfg.map_size,
         base_seed=env_cfg.base_seed,
         env_id_offset=env_cfg.env_id_offset,

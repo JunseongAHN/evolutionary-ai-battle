@@ -92,3 +92,33 @@ def test_skill_mode_mapping(spec_obs):
     assert space.describe([2]) == {"skill": "engage"}
     with pytest.raises(ValueError):
         space.to_skill_action(7, spec_obs)
+
+
+def test_aim_assist_snaps_to_nearest_enemy_only_while_firing(spec_obs):
+    from experiment.survev_rl.actions import aim_at_enemy
+
+    space = ActionSpace(assist=True, aim_assist=True)
+    me = spec_obs["self"]["pos"]
+    enemy = spec_obs["players"][0]["pos"]
+    dx, dy = enemy["x"] - me["x"], enemy["y"] - me["y"]
+    norm = (dx * dx + dy * dy) ** 0.5
+    expected = (pytest.approx(dx / norm), pytest.approx(dy / norm))
+    assert aim_at_enemy(spec_obs) == expected
+    # bin 4 (90 degrees) is replaced while fire is held ...
+    assert space.to_cpc_action([0, 4, 1, 0], spec_obs).aim == expected
+    # ... and kept when not firing, without an observation, or with the flag off
+    bin4 = aim_bin_to_vec(4)
+    assert space.to_cpc_action([0, 4, 0, 0], spec_obs).aim == (pytest.approx(bin4["x"]), pytest.approx(bin4["y"]))
+    assert space.to_cpc_action([0, 4, 1, 0], None).aim == (pytest.approx(bin4["x"]), pytest.approx(bin4["y"]))
+    assert ActionSpace(aim_assist=False).to_cpc_action([0, 4, 1, 0], spec_obs).aim == (pytest.approx(bin4["x"]), pytest.approx(bin4["y"]))
+    # standing enemies come before downed ones, dead and own-team entries are ignored
+    spec_obs["players"] = [
+        {**spec_obs["players"][0], "id": "team-b-1", "downed": True, "dist": 5.0, "pos": {"x": me["x"] + 5, "y": me["y"]}},
+        {**spec_obs["players"][0], "id": "team-a-1", "team": "team-a", "dist": 1.0, "pos": {"x": me["x"], "y": me["y"] + 1}},
+        {**spec_obs["players"][0], "id": "team-b-0", "dead": True, "dist": 2.0, "pos": {"x": me["x"] - 2, "y": me["y"]}},
+        {**spec_obs["players"][0], "id": "team-b-2", "dist": 30.0, "pos": {"x": me["x"], "y": me["y"] - 30}},
+    ]
+    assert aim_at_enemy(spec_obs) == (pytest.approx(0.0), pytest.approx(-1.0))
+    spec_obs["players"] = []
+    assert aim_at_enemy(spec_obs) is None
+    assert space.to_cpc_action([0, 4, 1, 0], spec_obs).aim == (pytest.approx(bin4["x"]), pytest.approx(bin4["y"]))

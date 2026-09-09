@@ -57,6 +57,7 @@ class CheckpointPolicy:
             mode=as_meta.get("mode", "primitive"),
             assist=as_meta.get("assist", True),
             auto_pickup=as_meta.get("auto_pickup", False),
+            aim_assist=as_meta.get("aim_assist", False),
         )
         self.onehot_dim = len(self.controlled) if len(self.controlled) > 1 else 0
         self.obs_dim = self.featurizer.size + self.onehot_dim

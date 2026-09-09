@@ -40,6 +40,10 @@ EPISODE_METRIC_KEYS: tuple[str, ...] = (
     "downed_time",
     "partner_survival_time",
     "partner_hp_end",
+    # race objective (bridge metrics) and the env's pickup stat; blank in progress.csv when absent
+    "captures",
+    "team_captures",
+    "armed",
 )
 LOG_COLUMNS: tuple[str, ...] = (
     "update",
@@ -462,6 +466,10 @@ def train(
             ep = f"eps={int(row.get('n_episodes', 0))} win={row.get('win_rate', float('nan')):.2f} " \
                  f"surv={row.get('survival_time', float('nan')):.1f}s ret={row.get('episode_return', float('nan')):.2f}" \
                  if row.get("n_episodes") else "eps=0"
+            if "team_captures" in row:
+                ep += f" tcap={row['team_captures']:.2f}"
+            if "armed" in row:
+                ep += f" armed={row['armed']:.2f}"
             print(
                 f"[ppo] upd {update}/{num_updates} step {global_step} sps {row['sps']:.0f} "
                 f"pl {row['policy_loss']:.3f} vl {row['value_loss']:.3f} ent {row['entropy']:.2f} "
