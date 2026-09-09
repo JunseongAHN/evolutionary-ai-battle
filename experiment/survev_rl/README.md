@@ -295,6 +295,33 @@ kiting fighter is stable (run E, more steps; 4 bridge processes on the Windows b
 the kit, so farming is the first thing it has to learn; (3) add `goal_hold` / `enemy_at_goal` to
 pull the fight onto the point. Spawn randomization stays on everywhere.
 
+## The race objective (2026-09-09, `--objective race`, random layout, chaser opponent)
+
+Design (준성's proposal, refined): one shared point at a time, +1 to the *team* whose member touches
+it first, the point then moves 30-70 u away; points keep coming for the whole 60 s, also after a
+wipe (`endOnElimination: false`), so dying forfeits every remaining point — the death penalty is
+implicit. `configs/race_v1.json` = capture 1.0 + damage_dealt 0.02, everything else 0. A scripted
+"go to the point" agent takes one point every ~4 s (~7 in 30 s), which is the racing ceiling.
+Frames: `out/ep5` (run F, with the point drawn as a decal).
+
+| run | loadout | steps | survival | captures / team | shots / hits | dmg dealt | kills | behaviour |
+|---|---|---|---|---|---|---|---|---|
+| F `race_v1` | fists | 600k | 9.1 s | 1.0 / 2.0 | 0.8 / 0.04 | 0.6 | 0 | sprints point to point at the scripted pace, no gun, dies to the chasers at ~11 s |
+| F+ (resume) | fists | 2.0M | 10.8 s | 1.4 / 2.8 | 1.5 / 0.07 | 0.7 | 0 | same, slightly longer evasion; still no gun |
+| G `race_v1` | armed | 600k | 10.2 s | 0.03 / 0.06 | 32 / 3.7 | 46 | 0.09 | fights the chasers (damage 8 -> 46, still rising), ignores the points |
+
+What it shows. As a reward *structure* the race does what v1/v2 could not: no bankable term, no
+suicide optimum, survival goes up instead of down, and the objective is learned in ~300k steps.
+What it does not do by itself is bridge farm -> fight: with fists the fastest route to reward is
+to run (fists are 1 u/s faster than a gun and the random points never pass the kit, so
+`damage_dealt` never fires); with guns the fastest route is to shoot the chasers that come to you
+(the capture needs a 3-5 s run under fire). Each loadout finds its own local optimum against an
+opponent that hunts instead of racing. The lever is therefore the opponent, not another reward
+term: a scripted `racer` that also takes points makes the enemy's captures cost us the point and
+makes killing it pay in captures within the same episode, which is the credit path the current
+chaser cannot provide. That, plus `--auto-pickup` or the armed stage as a warm start, is the next
+iteration; the reward stays at two terms.
+
 ## Interpretations of the spec made here (to align with the bridge)
 
 * Move speed: 13 u/s with fists (12 + 1), 12 u/s with a gun equipped.
