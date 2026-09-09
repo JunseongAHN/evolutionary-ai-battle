@@ -279,8 +279,9 @@ the hold bonus. The pressure term cannot teach shooting by itself: the credit pa
 (gun -> aim -> ~8 hits -> enemy dead -> penalty gone) is far too long for exploration.
 
 `point_v2` keeps only the non-bankable terms — hold (+), enemy-at-point (-), damage dealt (+) —
-and makes death (-1) cost more than any pressure stream, which orders the options as
-fight > flee > suicide. With guns in hand that is enough to start learning a real aim-and-fire
+and makes death (-1) cost more than the pressure an agent actually accumulates while it stays
+alive (pressure follows the enemies, and the chasers follow the agent away from the point), so
+ending the episode is no longer an escape; the options order as fight > flee > suicide. With guns in hand that is enough to start learning a real aim-and-fire
 behaviour against moving targets on the random layout (run E: 8 -> 68 damage per agent over
 400k steps, no spawn-direction exploit possible), but the agent then ignores the point: approaching
 it means approaching the chasers. Farming never appears in any run because the kit is only picked
