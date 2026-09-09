@@ -44,7 +44,9 @@ class EnvConfig:
     map_size: int = 128
     loadout: str = "fists"  # "armed" = spawn with an ak47 (curriculum; mock + bridge extension)
     layout: str = "fixed"  # "random" = seeded spawn rotation/distance (bridge option, see survev-bridge-v0.md)
-    goal: tuple[float, float] | None = None  # waypoint for the goal block / waypoint rewards (world x, y)
+    goal: tuple[float, float] | None = None  # fixed waypoint for the goal block / waypoint rewards (world x, y)
+    objective: dict[str, Any] | None = None  # e.g. {"mode": "race", "radius": 4, "minDist": 30, "maxDist": 70}
+    end_on_elimination: bool = True  # False: run to the time limit after a wipe (race), end when controlled agents are dead
     base_seed: int = 0
     env_id_offset: int = 0
     connect_timeout: float = 10.0
@@ -99,6 +101,8 @@ class SurvevVecEnv:
         loadout: str = "fists",
         layout: str = "fixed",
         goal: tuple[float, float] | None = None,
+        objective: Mapping[str, Any] | None = None,
+        end_on_elimination: bool = True,
     ) -> None:
         if n_envs <= 0:
             raise ValueError("n_envs must be >= 1")
@@ -115,6 +119,8 @@ class SurvevVecEnv:
         self.loadout = str(loadout)
         self.layout = str(layout)
         self.goal = (float(goal[0]), float(goal[1])) if goal is not None else None
+        self.objective = dict(objective) if objective else None
+        self.end_on_elimination = bool(end_on_elimination)
         self.env_id_offset = int(env_id_offset)
         self.seed_fn = seed_fn or default_seed_fn(base_seed, self.n_envs)
         self.featurizer = featurizer or Featurizer(FeaturizerConfig(time_limit=self.time_limit))
@@ -161,6 +167,10 @@ class SurvevVecEnv:
             extra["loadout"] = self.loadout
         if self.layout != "fixed":
             extra["layout"] = self.layout
+        if self.objective:
+            extra["objective"] = dict(self.objective)
+        if not self.end_on_elimination:
+            extra["endOnElimination"] = False
         msg = self.client.reset(
             self.env_id(i),
             scenario=self.scenario,
@@ -359,6 +369,8 @@ def make_vec_env(
         time_limit=env_cfg.time_limit,
         layout=env_cfg.layout,
         goal=env_cfg.goal,
+        objective=env_cfg.objective,
+        end_on_elimination=env_cfg.end_on_elimination,
         map_size=env_cfg.map_size,
         base_seed=env_cfg.base_seed,
         env_id_offset=env_cfg.env_id_offset,

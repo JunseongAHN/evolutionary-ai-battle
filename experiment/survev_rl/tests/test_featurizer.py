@@ -133,3 +133,17 @@ def test_goal_block_is_optional_and_egocentric(spec_obs):
     assert vec[-6:].tolist() == pytest.approx([1.0, 1.0, 0.0, 1.0, 1.0, 0.0])
     # the plain featurizer ignores a goal argument
     assert plain.featurize(spec_obs, t=1.0, goal=(138.7, 131.1)).shape == (plain.size,)
+
+
+def test_goal_block_reads_the_shared_objective_when_no_goal_is_given(spec_obs):
+    from experiment.survev_rl.featurizer import Featurizer, FeaturizerConfig
+
+    f = Featurizer(FeaturizerConfig(goal=True))
+    obs = copy.deepcopy(spec_obs)
+    obs["objective"] = {"index": 2, "pos": {"x": 138.7, "y": 131.1}, "radius": 4.0, "dist": 32.0}
+    vec = f.featurize(obs, t=1.0)
+    assert vec[-6:].tolist() == pytest.approx([1.0, 1.0, 0.0, 1.0, 1.0, 0.0])
+    # an explicit goal wins over the objective; objective: null means no goal
+    assert f.featurize(obs, t=1.0, goal=(106.7, 163.1))[-6:].tolist() == pytest.approx([1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
+    obs["objective"] = None
+    assert f.featurize(obs, t=1.0)[-6:].tolist() == [0.0] * 6

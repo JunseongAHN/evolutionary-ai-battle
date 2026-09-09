@@ -21,6 +21,7 @@ gas     7                   active, inside, shrinking, edge distance, new-center
 counts  5                   alive_count/4, alive_teams/2, enemies/K_en, loot/K_loot, bullets/K_bl
 mem     4 x K_en (3)        seen, last dx, last dy, recency = exp(-age / memory_decay_s)
 goal    6 (if goal=True)    present, dx, dy, dist, unit(x,y) of the waypoint handed to featurize()
+                            (or of obs["objective"], the shared race point, when none is handed in)
 ======  ==================  =====================================================================
 
 ``*`` = placeholders (always 0 today) for line-of-sight / cover features once the map has
@@ -196,8 +197,13 @@ class Featurizer:
         memory: AgentMemory | None = None,
         goal: tuple[float, float] | None = None,
     ) -> np.ndarray:
-        """``goal`` is the waypoint (world x, y) for the ``goal`` block; ignored unless ``config.goal``."""
+        """``goal`` is the waypoint (world x, y) for the ``goal`` block; ignored unless ``config.goal``.
+        When no explicit goal is given, the shared race point in ``obs["objective"]`` (if any) is used."""
         c = self.config
+        if goal is None and c.goal:
+            objective = obs.get("objective")
+            if objective:
+                goal = (float(objective["pos"]["x"]), float(objective["pos"]["y"]))
         me = obs["self"]
         sx, sy = float(me["pos"]["x"]), float(me["pos"]["y"])
         dx_dir, dy_dir = float(me["dir"]["x"]), float(me["dir"]["y"])

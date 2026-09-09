@@ -302,6 +302,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         loadout=args.loadout or str(env_meta.get("loadout", "fists")),
         layout=args.layout or str(env_meta.get("layout", "fixed")),
         goal=tuple(env_meta["goal"]) if env_meta.get("goal") else None,
+        objective=env_meta.get("objective"),
+        end_on_elimination=bool(env_meta.get("end_on_elimination", True)),
         base_seed=args.seed,
     )
     feat_cfg = FeaturizerConfig.from_dict(meta.get("featurizer") or {"time_limit": env_cfg.time_limit})

@@ -92,3 +92,56 @@ def test_make_vec_env_from_configs_and_action_validation(mock_server):
     with SurvevVecEnv(mock_server.url, n_envs=1) as env2:
         with pytest.raises(RuntimeError, match="reset"):
             env2.step(np.zeros((2, 4), dtype=np.int64))
+
+
+def test_race_objective_end_to_end_on_mock(mock_server):
+    import json
+
+    import numpy as np
+
+    from experiment.survev_rl.env import EnvConfig, make_vec_env
+    from experiment.survev_rl.featurizer import FeaturizerConfig
+    from experiment.survev_rl.rewards import RewardConfig
+
+    reward = RewardConfig.from_dict({**RewardConfig().to_dict(),
+                                     **json.load(open("experiment/survev_rl/configs/race_v1.json"))})
+    cfg = EnvConfig(bridge_url=mock_server.url, n_envs=1, scripted="idle", time_limit=30.0, base_seed=7,
+                    objective={"mode": "race", "radius": 4.0, "minDist": 30.0, "maxDist": 70.0},
+                    end_on_elimination=False)
+    env = make_vec_env(cfg, FeaturizerConfig(goal=True), reward_cfg=reward)
+    try:
+        obs = env.reset()
+        assert env.obs_dim == env.featurizer.size + 2
+        msg = env.last_messages[0]
+        point = msg.obs["team-a-0"]["objective"]
+        assert point is not None and point["index"] == 0 and msg.info.objective["captures"] == {"team-a": 0, "team-b": 0}
+        # the goal block is fed from the objective: unit vector toward the point
+        me = msg.obs["team-a-0"]["self"]["pos"]
+        dx, dy = point["pos"]["x"] - me["x"], point["pos"]["y"] - me["y"]
+        n = float(np.hypot(dx, dy))
+        assert obs[0, env.featurizer.size - 2 : env.featurizer.size].tolist() == pytest.approx([dx / n, dy / n], abs=1e-3)
+
+        # drive team-a-0 straight at the point (move bin from the harness vectors), a1 idle; expect a capture
+        from experiment.core.cpc_actions import MOVE_VECTORS
+        got = 0.0
+        captured = False
+        for _ in range(200):
+            msg = env.last_messages[0]
+            me = msg.obs["team-a-0"]["self"]["pos"]
+            p = msg.obs["team-a-0"]["objective"]["pos"]
+            dx, dy = p["x"] - me["x"], p["y"] - me["y"]
+            best = min(MOVE_VECTORS, key=lambda k: -(MOVE_VECTORS[k][0] * dx + MOVE_VECTORS[k][1] * dy) if k else 1e9)
+            acts = np.zeros((2, 4), dtype=np.int64)
+            acts[0, 0] = best
+            obs, r, d, infos = env.step(acts)
+            got += float(r[0])
+            comps = infos[0]["reward_components"]
+            if comps["capture"] > 0:
+                captured = True
+                assert comps["capture"] == 1.0 and infos[1]["reward_components"]["capture"] == 1.0  # team credit
+                break
+            assert not d[0]
+        assert captured, "team-a-0 never captured the point"
+        assert env.last_messages[0].info.objective["captures"]["team-a"] == 1
+    finally:
+        env.close()

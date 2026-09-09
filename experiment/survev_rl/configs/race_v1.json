@@ -1,0 +1,15 @@
+{
+  "_comment": "Race objective (2026-09-09): one shared moving point, +1 to the team that reaches it first, points keep coming for 60 s even after a wipe, so dying forfeits every remaining point (no explicit death term). damage_dealt is the only helper term (it is what produced shooting in the armed runs). Use with --objective race --layout random.",
+  "alive_per_step": 0.0,
+  "hp_delta": 0.0,
+  "damage_dealt": 0.02,
+  "damage_taken": 0.0,
+  "kill": 0.0,
+  "death": 0.0,
+  "team_win": 0.0,
+  "goal_progress": 0.0,
+  "goal_hold": 0.0,
+  "enemy_at_goal": 0.0,
+  "capture": 1.0,
+  "enemy_capture": 0.0
+}

@@ -45,6 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--goal", default=None,
                    help="waypoint 'x,y' or 'center' (132,132); adds the goal block to the observation and enables "
                         "the waypoint reward terms in --reward-json (goal_progress / goal_hold / enemy_at_goal)")
+    p.add_argument("--objective", default="none", choices=["none", "race"],
+                   help="'race': shared moving capture point (bridge option objective.mode); adds the goal block fed "
+                        "from obs.objective, runs episodes to the time limit after a wipe, rewards via 'capture' terms")
+    p.add_argument("--objective-radius", type=float, default=4.0)
+    p.add_argument("--objective-dist", default="30,70", help="min,max distance between consecutive points")
+    p.add_argument("--end-on-elimination", action="store_true",
+                   help="with --objective race: still end the episode when one team is left (default: keep racing)")
     p.add_argument("--seed", type=int, default=0, help="torch/numpy seed and base episode seed")
     p.add_argument("--no-validate", action="store_true", help="skip the observation key allowlist")
     # featurizer / actions / rewards
@@ -88,6 +95,13 @@ def parse_goal(spec: str | None) -> tuple[float, float] | None:
     return (x, y)
 
 
+def parse_objective(args: argparse.Namespace) -> dict[str, Any] | None:
+    if args.objective == "none":
+        return None
+    lo, hi = (float(v) for v in args.objective_dist.split(","))
+    return {"mode": args.objective, "radius": float(args.objective_radius), "minDist": lo, "maxDist": hi}
+
+
 def parse_reward_override(spec: str | None, team_mix: float) -> RewardConfig:
     data: dict[str, Any] = {}
     if spec:
@@ -127,12 +141,14 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         loadout=args.loadout,
         layout=args.layout,
         goal=parse_goal(args.goal),
+        objective=parse_objective(args),
+        end_on_elimination=args.objective == "none" or args.end_on_elimination,
         base_seed=args.seed,
         validate=not args.no_validate,
     )
     feat_cfg = FeaturizerConfig(
         rotate_to_facing=args.rotate_obs, memory=not args.no_memory, time_limit=args.time_limit,
-        goal=env_cfg.goal is not None,
+        goal=env_cfg.goal is not None or env_cfg.objective is not None,
     )
     action_space = ActionSpace(mode="primitive", assist=not args.no_assist, auto_pickup=args.auto_pickup)
     reward_cfg = parse_reward_override(args.reward_json, args.team_mix)

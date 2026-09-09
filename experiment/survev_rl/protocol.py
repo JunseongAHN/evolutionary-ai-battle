@@ -307,7 +307,16 @@ class GasView(TypedDict):
     pos_new: Vec2
 
 
-class AgentObservation(TypedDict):
+class ObjectiveView(TypedDict):
+    """Shared race point (same for every agent); ``dist`` from the observing agent."""
+
+    index: int
+    pos: Vec2
+    radius: float
+    dist: float
+
+
+class AgentObservation(TypedDict, total=False):
     self: SelfState
     teammates: list[TeammateView]
     players: list[PlayerView]
@@ -318,6 +327,7 @@ class AgentObservation(TypedDict):
     gas: GasView
     alive_count: int
     alive_teams: int
+    objective: ObjectiveView | None  # race mode only; null / absent otherwise
 
 
 # Allowlist (M6). Keys not listed here make ``validate_agent_observation`` raise.
@@ -334,6 +344,7 @@ ALLOWED_KEYS: dict[str, frozenset[str]] = {
     "bullets[]": frozenset(BulletView.__annotations__),
     "dead_bodies[]": frozenset(DeadBodyView.__annotations__),
     "gas": frozenset(GasView.__annotations__),
+    "objective": frozenset(ObjectiveView.__annotations__),
 }
 _VEC2_FIELDS: dict[str, tuple[str, ...]] = {
     "self": ("pos", "dir"),
@@ -389,16 +400,20 @@ def validate_agent_observation(obs: Mapping[str, Any], where: str = "obs") -> No
         for name in _VEC2_FIELDS["gas"]:
             if name in obs["gas"]:
                 _check_vec2(obs["gas"][name], f"{where}.gas.{name}")
+    if obs.get("objective") is not None:
+        _check_keys(obs["objective"], ALLOWED_KEYS["objective"], f"{where}.objective")
+        if "pos" in obs["objective"]:
+            _check_vec2(obs["objective"]["pos"], f"{where}.objective.pos")
 
 
 # --------------------------------------------------------------------------------------
 # Events, info, metrics, obs message
 # --------------------------------------------------------------------------------------
-EventType = Literal["fire", "damage", "down", "kill", "loot", "heal", "revive", "shots_heard"]
+EventType = Literal["fire", "damage", "down", "kill", "capture", "loot", "heal", "revive", "shots_heard"]
 
 
 class Event(TypedDict, total=False):
-    """fire / damage / down / kill (later: loot, heal, revive, shots_heard)."""
+    """fire / damage / down / kill / capture (later: loot, heal, revive, shots_heard)."""
 
     type: str
     t: float
@@ -412,6 +427,10 @@ class Event(TypedDict, total=False):
     hp_after: float
     downed: bool
     dead: bool
+    # capture (race objective): the capturing agent's team, the point index, seconds the point was up
+    team: str
+    index: int
+    time_to_capture: float
 
 
 METRIC_KEYS: tuple[str, ...] = (
@@ -428,6 +447,8 @@ METRIC_KEYS: tuple[str, ...] = (
     "team_win",
     "partner_survival_time",
     "partner_hp_end",
+    "captures",
+    "team_captures",
 )
 
 
@@ -448,6 +469,8 @@ class Metrics:
     team_win: bool = False
     partner_survival_time: float = 0.0
     partner_hp_end: float = 0.0
+    captures: int = 0  # race objective: points this agent touched first
+    team_captures: int = 0  # race objective: points its team took
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> "Metrics":
@@ -467,8 +490,9 @@ class Metrics:
 class ObsInfo:
     alive_teams: int = 2
     winner_team: str | None = None
-    reason: str | None = None  # "elimination" | "time_limit" | None
+    reason: str | None = None  # "elimination" | "time_limit" | "controlled_dead" | None
     metrics: dict[str, Metrics] | None = None
+    objective: dict[str, Any] | None = None  # race: {"index", "pos", "radius", "captures": {team: n}}
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any] | None) -> "ObsInfo":
@@ -482,6 +506,7 @@ class ObsInfo:
             winner_team=data.get("winner_team"),
             reason=data.get("reason"),
             metrics=metrics,
+            objective=data.get("objective"),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -490,6 +515,7 @@ class ObsInfo:
             "winner_team": self.winner_team,
             "reason": self.reason,
             "metrics": {k: v.to_json() for k, v in self.metrics.items()} if self.metrics else None,
+            "objective": self.objective,
         }
 
 

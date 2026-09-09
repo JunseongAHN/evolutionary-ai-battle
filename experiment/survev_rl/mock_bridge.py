@@ -255,6 +255,7 @@ class SimPlayer:
     kills: int = 0
     shots: int = 0
     hits_given: int = 0
+    captures: int = 0
     # scripted controller memory
     script: dict[str, Any] = field(default_factory=dict)
 
@@ -342,7 +343,21 @@ class FieldSim:
         self.layout = str(options.get("layout", "fixed"))  # accepted for parity; the mock keeps its fixed geometry
         if self.layout not in ("fixed", "random"):
             raise ProtocolError(f"unknown layout {self.layout!r}")
+        objective = dict(options.get("objective") or {"mode": "none"})
+        if objective.get("mode", "none") not in ("none", "race"):
+            raise ProtocolError(f"unknown objective mode {objective.get('mode')!r}")
+        self.race = objective.get("mode") == "race"
+        self.objective_radius = float(objective.get("radius", 4.0))
+        self.objective_min = float(objective.get("minDist", 30.0))
+        self.objective_max = float(objective.get("maxDist", 70.0))
+        self.objective_margin = float(objective.get("margin", 12.0))
+        self.end_on_elimination = bool(options.get("endOnElimination", True))
         self.rng = random.Random(f"{seed}")
+        self.objective_rng = random.Random(f"{seed}/objective")
+        self.objective_index = 0
+        self.objective_spawned_at = 0.0
+        self.captures: dict[str, int] = {"team-a": 0, "team-b": 0}
+        self.objective_pos: tuple[float, float] | None = None
         self.tick = 0
         self.done = False
         self.reason: str | None = None
@@ -357,11 +372,58 @@ class FieldSim:
         }
         self.loot: dict[int, Loot] = {}
         self._spawn_loot()
+        if self.race:
+            self.objective_pos = self._sample_objective((132.0, 132.0))
         if self.loadout == "armed":
             for p in self.players.values():
                 p.weapons[0] = {"slot": 0, "type": "ak47", "ammo": GUNS["ak47"].max_clip}
                 p.inventory["762mm"] = BAG_CAPS_L0["762mm"]
                 p.cur_weap_idx = 0
+
+    # -- race objective ----------------------------------------------------------------------
+    def _sample_objective(self, frm: tuple[float, float]) -> tuple[float, float]:
+        lo, hi = 68.0 + self.objective_margin, 196.0 - self.objective_margin  # 128 region centered at 132
+        pos = (self.objective_rng.uniform(lo, hi), self.objective_rng.uniform(lo, hi))
+        for _ in range(64):
+            d = dist(pos, frm)
+            if self.objective_min <= d <= self.objective_max:
+                break
+            pos = (self.objective_rng.uniform(lo, hi), self.objective_rng.uniform(lo, hi))
+        return pos
+
+    def _check_capture(self) -> None:
+        if not self.race or self.objective_pos is None:
+            return
+        best: SimPlayer | None = None
+        best_d = self.objective_radius + 1.0
+        for p in self.players.values():
+            if not p.standing:
+                continue
+            d = dist(p.pos, self.objective_pos)
+            if d <= self.objective_radius and d < best_d:
+                best, best_d = p, d
+        if best is None:
+            return
+        self.captures[best.team] += 1
+        best.captures += 1
+        self.events.append({
+            "type": "capture", "t": round(self.t, 3), "agent": best.id, "team": best.team,
+            "index": self.objective_index, "pos": vec2(round(self.objective_pos[0], 3), round(self.objective_pos[1], 3)),
+            "time_to_capture": round(self.t - self.objective_spawned_at, 3),
+        })
+        self.objective_index += 1
+        self.objective_spawned_at = self.t
+        self.objective_pos = self._sample_objective(self.objective_pos)
+
+    def _objective_info(self) -> dict[str, Any] | None:
+        if not self.race or self.objective_pos is None:
+            return None
+        return {
+            "index": self.objective_index,
+            "pos": vec2(round(self.objective_pos[0], 3), round(self.objective_pos[1], 3)),
+            "radius": self.objective_radius,
+            "captures": dict(self.captures),
+        }
 
     # -- properties ------------------------------------------------------------------------
     @property
@@ -624,6 +686,7 @@ class FieldSim:
             if p.downed:
                 p.downed_ticks += 1
         self.tick += 1
+        self._check_capture()
 
     def _update_action(self, p: SimPlayer) -> None:
         if p.action_type == ACTION_NONE:
@@ -829,14 +892,22 @@ class FieldSim:
             source.kills += 1
         self.events.append({"type": "kill", "t": self.t, "agent": target.id, "source": source_id})
 
+    def _race_winner(self) -> str | None:
+        a, b = self.captures["team-a"], self.captures["team-b"]
+        return None if a == b else ("team-a" if a > b else "team-b")
+
     def _check_done(self) -> bool:
         alive = self.alive_teams()
-        if len(alive) <= 1:
+        controlled_dead = bool(self.controlled) and all(self.players[a].dead for a in self.controlled)
+        if self.end_on_elimination and len(alive) <= 1:
             self.done, self.reason = True, "elimination"
-            self.winner_team = alive[0] if alive else None
+            self.winner_team = self._race_winner() if self.race else (alive[0] if alive else None)
+        elif not self.end_on_elimination and (controlled_dead or not alive):
+            self.done, self.reason = True, "controlled_dead"
+            self.winner_team = self._race_winner() if self.race else (alive[0] if len(alive) == 1 else None)
         elif self.t >= self.time_limit - 1e-9:
             self.done, self.reason = True, "time_limit"
-            self.winner_team = None
+            self.winner_team = self._race_winner() if self.race else None
         if self.done:
             self.metrics = {aid: self._metrics_for(p) for aid, p in self.players.items()}
         return self.done
@@ -860,6 +931,8 @@ class FieldSim:
                 partner.death_time if partner and partner.death_time is not None else self.t, 3
             ),
             "partner_hp_end": round(partner.hp, 3) if partner else 0.0,
+            "captures": p.captures,
+            "team_captures": p.captures + (partner.captures if partner else 0),
         }
 
     # -- observations -------------------------------------------------------------------------
@@ -951,6 +1024,15 @@ class FieldSim:
                 )
         obs["players"].sort(key=lambda e: e["dist"])
         obs["loot"].sort(key=lambda e: e["dist"])
+        if self.race and self.objective_pos is not None:
+            obs["objective"] = {
+                "index": self.objective_index,
+                "pos": vec2(round(self.objective_pos[0], 3), round(self.objective_pos[1], 3)),
+                "radius": self.objective_radius,
+                "dist": round(dist(me, self.objective_pos), 3),
+            }
+        else:
+            obs["objective"] = None
         return obs
 
     def observe(self) -> dict[str, Any]:
@@ -969,6 +1051,7 @@ class FieldSim:
                 "winner_team": self.winner_team,
                 "reason": self.reason,
                 "metrics": self.metrics,
+                "objective": self._objective_info(),
             },
         }
 

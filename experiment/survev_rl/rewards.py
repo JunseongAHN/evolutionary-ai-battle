@@ -23,6 +23,10 @@ Extensibility hooks: ``partner_hp_delta`` / ``partner_alive_per_step`` (cooperat
 ``cover_bonus`` (placeholder term, 0 until obstacle/LOS features exist) and
 ``time_penalty_after_s`` / ``time_penalty_per_step`` (anti-stalling).
 
+Race terms (``capture`` events from the bridge's race objective): ``capture`` per point the agent's
+*team* took — both members are credited, so teammates do not compete for the same point — and
+``enemy_capture`` per point the other team took (negative weight = the loss of a contested point).
+
 Waypoint terms (v1 "global point" objective, all 0 by default; ``goal`` = world (x, y) passed by
 the env): ``goal_progress`` x (distance to the point removed this step, in u, while standing),
 ``goal_hold`` per step while standing within ``goal_radius`` of the point, and ``enemy_at_goal`` x
@@ -55,6 +59,8 @@ COMPONENT_KEYS: tuple[str, ...] = (
     "goal_progress",
     "goal_hold",
     "enemy_goal",
+    "capture",
+    "enemy_capture",
 )
 
 
@@ -77,6 +83,8 @@ class RewardConfig:
     goal_radius: float = 6.0
     enemy_at_goal: float = 0.0  # per step x sum_enemies max(0, 1 - d / enemy_goal_radius); use a negative weight
     enemy_goal_radius: float = 30.0
+    capture: float = 0.0  # per race point taken by the agent's team (team credit: both members get it)
+    enemy_capture: float = 0.0  # per race point taken by the other team (use a negative weight)
     team_mix: float = 0.0
 
     def __post_init__(self) -> None:
@@ -181,9 +189,15 @@ def compute_reward_components(
         comp["hp"] = config.hp_delta * hp_delta_corrected(me_prev, me)
         dealt = taken = 0.0
         kills = deaths = 0
+        captures = enemy_captures = 0
         for e in events:
             kind = e.get("type")
-            if kind == "damage":
+            if kind == "capture":
+                if str(e.get("team", team_of.get(str(e.get("agent", "")), ""))) == team:
+                    captures += 1
+                else:
+                    enemy_captures += 1
+            elif kind == "damage":
                 amount = float(e.get("amount", 0.0))
                 victim = str(e.get("agent", ""))
                 if e.get("source") == aid and team_of.get(victim, "") != team:
@@ -200,6 +214,8 @@ def compute_reward_components(
         comp["damage_taken"] = config.damage_taken * taken
         comp["kill"] = config.kill * kills
         comp["death"] = config.death * deaths
+        comp["capture"] = config.capture * captures
+        comp["enemy_capture"] = config.enemy_capture * enemy_captures
         if done and winner is not None and winner == team:
             comp["team_win"] = config.team_win
         partner, partner_prev = _partner_entry(cur), _partner_entry(prev)

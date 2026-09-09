@@ -206,3 +206,20 @@ def test_goal_terms_stop_for_downed_and_dead_agents():
     b = compute_reward_breakdown(downed, dead, [], RUNNING, POINT_CFG, CONTROLLED, goal=POINT)
     assert b.totals["team-a-0"] == 0.0  # dead: no progress, no hold, no pressure penalty
     assert b.components["team-a-1"]["enemy_goal"] == pytest.approx(-0.02)
+
+
+def test_capture_is_team_credited():
+    cfg = RewardConfig(alive_per_step=0.0, hp_delta=0.0, damage_dealt=0.0, death=0.0, team_win=0.0,
+                       capture=1.0, enemy_capture=-0.5)
+    ours = {"type": "capture", "t": 3.0, "agent": "team-a-1", "team": "team-a", "index": 0,
+            "pos": {"x": 150.0, "y": 118.0}, "time_to_capture": 3.0}
+    theirs = {"type": "capture", "t": 7.0, "agent": "team-b-0", "team": "team-b", "index": 1,
+              "pos": {"x": 110.0, "y": 140.0}, "time_to_capture": 4.0}
+    b = compute_reward_breakdown(_obs(), _obs(), [ours], RUNNING, cfg, CONTROLLED)
+    # both members of team-a get the point, whoever touched it
+    assert b.components["team-a-0"]["capture"] == 1.0 and b.components["team-a-1"]["capture"] == 1.0
+    assert b.totals == {"team-a-0": 1.0, "team-a-1": 1.0}
+    b = compute_reward_breakdown(_obs(), _obs(), [theirs], RUNNING, cfg, CONTROLLED)
+    assert b.components["team-a-0"]["enemy_capture"] == -0.5 and b.components["team-a-0"]["capture"] == 0.0
+    # default weights: capture events are ignored
+    assert compute_rewards(_obs(), _obs(), [ours, theirs], RUNNING, RewardConfig(), CONTROLLED)["team-a-0"] == pytest.approx(0.01)
