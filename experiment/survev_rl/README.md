@@ -322,6 +322,26 @@ makes killing it pay in captures within the same episode, which is the credit pa
 chaser cannot provide. That, plus `--auto-pickup` or the armed stage as a warm start, is the next
 iteration; the reward stays at two terms.
 
+## Racer opponent (2026-09-10, `--scripted racer`)
+
+`racer` (survev `scriptedPolicy.ts`) shares the chaser's loot and combat phases but engages an enemy
+only inside 25 u and otherwise runs to the shared race point, so the other team's captures cost the
+controlled team points and killing it pays within the episode. Alone against an idle team it takes a
+point every ~4 s and still kills the idlers when it passes them. Frames: `out/ep6`.
+
+| run | init | opponent | assist | steps | survival | captures / team | shots / hits | dmg | kills | win |
+|---|---|---|---|---|---|---|---|---|---|---|
+| H `race_v1` | scratch | racer | auto-pickup | 600k | 9.6 s | 0.8 / 1.6 | 3.1 / 0.14 | 0.9 | 0 | 56 % |
+| I `race_v1` | resume G (armed fighter) | racer | auto-pickup | +600k | 15.8 s | 0.13 / 0.27 | 14.7 / 1.1 | 8.8 | 0 | 1 % |
+
+Against the racer the task is harder than against the chaser (F took 2.0 points, H 1.6) because the
+points are now contested and the racers still kill the agents at ~10 s. H races and, thanks to
+auto-pickup, sometimes fires; I keeps the kiting-fighter prior it was warmed with (more shots and
+damage, three times the survival) but has not re-learned the race in 600k steps. The credit path
+(kill -> uncontested points) now exists in the environment; what is missing is training budget —
+these are 10-minute runs on two CPU cores. Next: the same two configurations for 3-5M steps on the
+GPU box with one bridge process per core (`--n-envs 16` each), keeping the two-term reward.
+
 ## Interpretations of the spec made here (to align with the bridge)
 
 * Move speed: 13 u/s with fists (12 + 1), 12 u/s with a gun equipped.
