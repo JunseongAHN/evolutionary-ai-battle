@@ -27,7 +27,7 @@ from .actions import ActionSpace
 from .bridge_client import BridgeClient
 from .featurizer import AgentMemory, Featurizer, FeaturizerConfig
 from .protocol import DEFAULT_BRIDGE_URL, DEFAULT_SCENARIO, ObsMessage
-from .rewards import RewardConfig, compute_reward_breakdown
+from .rewards import RewardConfig, compute_reward_breakdown, has_gun
 
 SeedFn = Callable[[int, int], str | int]
 
@@ -144,6 +144,7 @@ class SurvevVecEnv:
         self._ep_len = np.zeros(self.n_rows, dtype=np.int64)
         self._ep_goal_hold = np.zeros(self.n_rows, dtype=np.int64)  # steps standing within goal_radius
         self._ep_goal_min = np.full(self.n_rows, np.inf, dtype=np.float64)  # closest approach to the goal
+        self._ep_gun_t = np.full(self.n_rows, -1.0, dtype=np.float64)  # game time the agent first held a gun
         self._last_seed: list[str | int | None] = [None] * self.n_envs
 
     # -- helpers ---------------------------------------------------------------------------
@@ -196,6 +197,7 @@ class SurvevVecEnv:
             self._ep_len[row] = 0
             self._ep_goal_hold[row] = 0
             self._ep_goal_min[row] = np.inf
+            self._ep_gun_t[row] = -1.0
         return msg
 
     def _featurize_env(self, i: int, msg: ObsMessage, out: np.ndarray) -> None:
@@ -261,6 +263,8 @@ class SurvevVecEnv:
                     "reward_components": breakdown.components[aid],
                     "n_events": len(new.events),
                 }
+                if self._ep_gun_t[row] < 0 and has_gun(me):
+                    self._ep_gun_t[row] = float(new.t)
                 if self.goal is not None:
                     pos = me.get("pos") or {}
                     d = float(np.hypot(float(pos.get("x", 0.0)) - self.goal[0], float(pos.get("y", 0.0)) - self.goal[1]))
@@ -276,6 +280,8 @@ class SurvevVecEnv:
                     dones[row] = True
                     m = metrics.get(aid)
                     ep_metrics = m.as_float_dict() if m is not None else {}
+                    ep_metrics["gun_pickup_time"] = float(self._ep_gun_t[row])  # -1 = never held a gun
+                    ep_metrics["armed"] = 1.0 if self._ep_gun_t[row] >= 0 else 0.0
                     if self.goal is not None:  # waypoint stats ride along with the bridge metrics
                         ep_metrics["goal_hold_frac"] = float(self._ep_goal_hold[row]) / max(1, int(self._ep_len[row]))
                         ep_metrics["goal_min_dist"] = float(self._ep_goal_min[row]) if np.isfinite(self._ep_goal_min[row]) else -1.0

@@ -138,6 +138,8 @@ targets resolved from the observation. Not executable through the bridge yet (se
 | `goal_progress` | 0 | per world unit of distance to the waypoint removed this step (standing agents only; needs `--goal`) |
 | `goal_hold` / `goal_radius` | 0 / 6 u | per step while standing within `goal_radius` of the waypoint |
 | `enemy_at_goal` / `enemy_goal_radius` | 0 / 30 u | per step x sum over living enemies of max(0, 1 - d(enemy, waypoint) / radius), from the enemies' true positions (reward side only). Negative weight = the 'keep them off the point' pressure that only killing or repelling removes |
+| `capture` / `enemy_capture` | 0 / 0 | per race point taken by the agent's team (both members are credited) / by the other team |
+| `gun_pickup` | 0 | once per episode, on the step the agent first holds a gun (weapon slots empty -> gun; from consecutive observations, no engine event) |
 
 Rewards are for optimisation only. Evaluation and logging use the metric vector
 (`info.metrics`: survival_time, hp_mean/hp_end, damage_dealt/taken, team_win, partner
@@ -334,13 +336,22 @@ point every ~4 s and still kills the idlers when it passes them. Frames: `out/ep
 | H `race_v1` | scratch | racer | auto-pickup | 600k | 9.6 s | 0.8 / 1.6 | 3.1 / 0.14 | 0.9 | 0 | 56 % |
 | I `race_v1` | resume G (armed fighter) | racer | auto-pickup | +600k | 15.8 s | 0.13 / 0.27 | 14.7 / 1.1 | 8.8 | 0 | 1 % |
 
+| J `race_v2` (+ `gun_pickup` 1.0) | scratch | racer | auto-pickup | 600k | 14.3 s | 0.02 / 0.04 | 19.8 / 1.2 | 6.4 | 0 | 0 % |
+
+J answers "why does it never pick up a gun": nothing in `race_v1` values a gun before it is fired,
+fists are 1 u/s faster, and the kit is never on the way to a random point. With a one-time +1 for
+first holding a gun, 69 % of the agents arm themselves (median 1.3 s after spawn, eval over 24
+episodes) and shooting triples — but they then fight and wander instead of racing (`out/ep7`).
+
 Against the racer the task is harder than against the chaser (F took 2.0 points, H 1.6) because the
 points are now contested and the racers still kill the agents at ~10 s. H races and, thanks to
 auto-pickup, sometimes fires; I keeps the kiting-fighter prior it was warmed with (more shots and
 damage, three times the survival) but has not re-learned the race in 600k steps. The credit path
-(kill -> uncontested points) now exists in the environment; what is missing is training budget —
-these are 10-minute runs on two CPU cores. Next: the same two configurations for 3-5M steps on the
-GPU box with one bridge process per core (`--n-envs 16` each), keeping the two-term reward.
+(kill -> uncontested points) now exists in the environment, and each behaviour appears as soon as a
+term names it (race: `capture`; farm: `gun_pickup`; fight: `damage_dealt` once armed). What no
+600k-step run on two CPU cores has shown yet is the *composition* farm -> fight -> race. Next: the
+`race_v2` configuration for 3-5M steps on the GPU box (one bridge process per core, `--n-envs 16`
+each, seeds 1-4), then `--resume` it against `racer` without `--auto-pickup`.
 
 ## Interpretations of the spec made here (to align with the bridge)
 

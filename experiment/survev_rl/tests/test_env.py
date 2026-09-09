@@ -42,7 +42,7 @@ def test_vec_env_end_to_end_with_auto_reset(mock_server):
                     finished += 1
                     for row in (r0, r1):
                         info = infos[row]
-                        assert set(info["episode_metrics"]) == set(METRIC_KEYS)
+                        assert set(info["episode_metrics"]) == set(METRIC_KEYS) | {"gun_pickup_time", "armed"}  # bridge metrics + env pickup stats
                         assert info["reason"] in ("elimination", "time_limit")
                         assert info["episode_length"] >= 1 and isinstance(info["episode_return"], float)
                         assert info["terminal_observation"].shape == (218,)

@@ -223,3 +223,21 @@ def test_capture_is_team_credited():
     assert b.components["team-a-0"]["enemy_capture"] == -0.5 and b.components["team-a-0"]["capture"] == 0.0
     # default weights: capture events are ignored
     assert compute_rewards(_obs(), _obs(), [ours, theirs], RUNNING, RewardConfig(), CONTROLLED)["team-a-0"] == pytest.approx(0.01)
+
+
+def test_gun_pickup_pays_once_on_the_transition():
+    cfg = RewardConfig(alive_per_step=0.0, hp_delta=0.0, damage_dealt=0.0, death=0.0, team_win=0.0, gun_pickup=1.0)
+    fists = _obs()
+    armed = _obs()
+    for o in (fists, armed):
+        o["team-a-0"]["self"]["weapons"] = [{"slot": 0, "type": "", "ammo": 0}, {"slot": 1, "type": "", "ammo": 0},
+                                            {"slot": 2, "type": "fists", "ammo": 0}, {"slot": 3, "type": "", "ammo": 0}]
+    armed["team-a-0"]["self"]["weapons"][1] = {"slot": 1, "type": "mp5", "ammo": 30}  # picked up, not yet equipped
+    b = compute_reward_breakdown(fists, armed, [], RUNNING, cfg, CONTROLLED)
+    assert b.components["team-a-0"]["gun_pickup"] == 1.0 and b.components["team-a-1"]["gun_pickup"] == 0.0
+    # holding the gun on later steps pays nothing more; dropping and re-picking would pay again by design
+    assert compute_reward_breakdown(armed, armed, [], RUNNING, cfg, CONTROLLED).totals["team-a-0"] == 0.0
+    # the "armed" loadout spawns with a gun already in the slot: no pickup reward on reset -> first step
+    assert compute_reward_breakdown(armed, armed, [], RUNNING, cfg, CONTROLLED).components["team-a-0"]["gun_pickup"] == 0.0
+    # default weights: term off
+    assert compute_reward_breakdown(fists, armed, [], RUNNING, RewardConfig(), CONTROLLED).components["team-a-0"]["gun_pickup"] == 0.0

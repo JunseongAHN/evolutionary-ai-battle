@@ -1,0 +1,13 @@
+{
+  "_comment": "race_v1 + gun_pickup: +1 once, the step the agent first holds a gun. Without it nothing in the reward values a gun before it is fired, so fists (1 u/s faster) win the race and damage_dealt never starts flowing (runs F-I never picked up). Use with --objective race --scripted racer --auto-pickup.",
+  "alive_per_step": 0.0,
+  "hp_delta": 0.0,
+  "damage_dealt": 0.02,
+  "damage_taken": 0.0,
+  "kill": 0.0,
+  "death": 0.0,
+  "team_win": 0.0,
+  "capture": 1.0,
+  "enemy_capture": 0.0,
+  "gun_pickup": 1.0
+}

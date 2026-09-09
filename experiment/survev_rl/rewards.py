@@ -23,6 +23,10 @@ Extensibility hooks: ``partner_hp_delta`` / ``partner_alive_per_step`` (cooperat
 ``cover_bonus`` (placeholder term, 0 until obstacle/LOS features exist) and
 ``time_penalty_after_s`` / ``time_penalty_per_step`` (anti-stalling).
 
+``gun_pickup`` pays once, on the step the agent's weapon slots go from no gun to a gun (computed
+from consecutive observations, no engine event needed) — the "arm yourself first" heuristic every
+human follows, which nothing else in the reward expresses before a gun is in hand.
+
 Race terms (``capture`` events from the bridge's race objective): ``capture`` per point the agent's
 *team* took — both members are credited, so teammates do not compete for the same point — and
 ``enemy_capture`` per point the other team took (negative weight = the loss of a contested point).
@@ -61,6 +65,7 @@ COMPONENT_KEYS: tuple[str, ...] = (
     "enemy_goal",
     "capture",
     "enemy_capture",
+    "gun_pickup",
 )
 
 
@@ -85,6 +90,7 @@ class RewardConfig:
     enemy_goal_radius: float = 30.0
     capture: float = 0.0  # per race point taken by the agent's team (team credit: both members get it)
     enemy_capture: float = 0.0  # per race point taken by the other team (use a negative weight)
+    gun_pickup: float = 0.0  # once per episode, the step the agent first holds a gun (empty slots -> a gun)
     team_mix: float = 0.0
 
     def __post_init__(self) -> None:
@@ -126,6 +132,14 @@ def hp_delta_corrected(prev: Mapping[str, Any], cur: Mapping[str, Any]) -> float
 def _cover_term(obs: AgentObservation) -> float:
     """Placeholder for cover/LOS shaping; returns 0 until obstacle features are real."""
     return 0.0
+
+
+def has_gun(state: Mapping[str, Any]) -> bool:
+    """True when a gun sits in either gun slot (0 or 1), equipped or not."""
+    for w in state.get("weapons") or []:
+        if int(w.get("slot", -1)) in (0, 1) and str(w.get("type") or ""):
+            return True
+    return False
 
 
 def _partner_entry(obs: AgentObservation) -> Mapping[str, Any] | None:
@@ -216,6 +230,8 @@ def compute_reward_components(
         comp["death"] = config.death * deaths
         comp["capture"] = config.capture * captures
         comp["enemy_capture"] = config.enemy_capture * enemy_captures
+        if config.gun_pickup != 0.0 and has_gun(me) and not has_gun(me_prev) and not me.get("dead"):
+            comp["gun_pickup"] = config.gun_pickup
         if done and winner is not None and winner == team:
             comp["team_win"] = config.team_win
         partner, partner_prev = _partner_entry(cur), _partner_entry(prev)
