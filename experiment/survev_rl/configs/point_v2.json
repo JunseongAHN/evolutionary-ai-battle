@@ -1,0 +1,15 @@
+{
+  "_comment": "point_v1 lesson: goal_progress is banked in 2 s and dying ends the enemy_at_goal stream, so 'rush the point and die' is optimal. v2 keeps only the non-bankable terms: hold the point (+), enemies near the point (-), damage dealt (+), and makes death cost more than any pressure stream (-1). Ordering becomes fight > flee > suicide.",
+  "alive_per_step": 0.0,
+  "hp_delta": 0.0,
+  "damage_dealt": 0.02,
+  "damage_taken": 0.0,
+  "kill": 0.0,
+  "death": -1.0,
+  "team_win": 0.0,
+  "goal_progress": 0.0,
+  "goal_hold": 0.01,
+  "goal_radius": 6.0,
+  "enemy_at_goal": -0.02,
+  "enemy_goal_radius": 30.0
+}

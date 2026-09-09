@@ -76,7 +76,9 @@ several bridge processes (one per core) and one training process per bridge, or 
 | `--ticks` | 10 | game ticks per decision (1 tick = 0.01 s; 10 = 0.1 s policy cadence) |
 | `--controlled` | `team-a-0,team-a-1` | agents driven by the policy; the rest use `--scripted` (`chaser`/`idle`) |
 | `--time-limit` / `--map-size` | 60 / 128 | reset options |
-| `--loadout` | `fists` | `armed` spawns everyone with an ak47 + 90 rounds (curriculum). Sent as reset option `loadout`; **not in spec v0** — the mock supports it, the bridge would need to add it |
+| `--loadout` | `fists` | `armed` spawns everyone with an ak47 + 90 rounds (curriculum). Reset option `loadout` (bridge + mock) |
+| `--layout` | `fixed` | `random` rotates the spawn axis and draws the duo-to-center distance from [24, 44] u per seed (reset option `layout`, bridge; the mock accepts it but keeps its fixed geometry). Use it for any training run: on the fixed layout PPO learned to aim at the constant spawn direction |
+| `--goal` | – | waypoint `center` (132,132) or `x,y`: appends the 6-float goal block to the observation and enables the waypoint reward terms (`goal_progress`, `goal_hold`, `goal_radius`, `enemy_at_goal`, `enemy_goal_radius` in `--reward-json`; presets in `configs/point_v1*.json`). The goal is stored in the checkpoint meta, so `eval` and `policy_server` reuse it |
 | `--seed` | 0 | torch/numpy seed and base of the episode seeds (`cpc-duo2v2-seed-<base+env+n_envs*episode>`) |
 | `--rotate-obs` | off | egocentric rotation into the facing frame (see featurizer) |
 | `--no-memory` | off | drop the last-seen enemy memory block |
@@ -133,6 +135,9 @@ targets resolved from the observation. Not executable through the bridge yet (se
 | `cover_bonus` | 0 | placeholder (0 until obstacle/LOS features exist) |
 | `time_penalty_after_s` / `time_penalty_per_step` | 0 / 0 | per-step penalty once `t` passes the threshold |
 | `team_mix` | 0 | `r_i <- (1-mix) r_i + mix mean_team(r)` over controlled teammates |
+| `goal_progress` | 0 | per world unit of distance to the waypoint removed this step (standing agents only; needs `--goal`) |
+| `goal_hold` / `goal_radius` | 0 / 6 u | per step while standing within `goal_radius` of the waypoint |
+| `enemy_at_goal` / `enemy_goal_radius` | 0 / 30 u | per step x sum over living enemies of max(0, 1 - d(enemy, waypoint) / radius), from the enemies' true positions (reward side only). Negative weight = the 'keep them off the point' pressure that only killing or repelling removes |
 
 Rewards are for optimisation only. Evaluation and logging use the metric vector
 (`info.metrics`: survival_time, hp_mean/hp_end, damage_dealt/taken, team_win, partner
@@ -248,6 +253,46 @@ Rendered frames of both runs are in `out/ep2/` and `out/ep2_armed/` (real client
 * Coordinates: `MOVE_LABELS` are the harness names with screen-y-down (`up` = (0, -1)); in survev
   world coordinates y grows upward on screen, so the label `up_left` is a south-west move. Use
   the vectors, not the names, when reading decisions.
+
+## The "global point" objective (2026-09-09, random layout, 400k agent steps each, 2 CPU cores)
+
+Objective proposed for v1: one global point (the field center; `--goal center`), reward for going
+there, penalty as enemies get close to it, nothing else — the expectation being that killing the
+enemies (the only way to remove the penalty) would make the agent farm a gun and fight.
+Presets: `configs/point_v1.json` (progress 0.05/u, hold 0.01/step within 6 u, enemy-at-point
+-0.02 x pressure), `point_v1_damage.json` (+ damage_dealt 0.02), `point_v2.json` (see below).
+Frames: `out/ep3` (point_v1) and `out/ep4` (point_v2, armed).
+
+| run | loadout | extras | survival | shots / hits | dmg dealt | hold frac | win | behaviour |
+|---|---|---|---|---|---|---|---|---|
+| A `point_v1` | fists | – | 4.6 s | 0.8 / 0.05 | 0.5 | 0.40 | 0 % | sprint to the point past the kit, die on it |
+| B `point_v1_damage` | fists | – | 4.7 s | 1.5 / 0.1 | 0.9 | 0.40 | 0 % | same |
+| C `point_v1_damage` | fists | `--auto-pickup` | 4.7 s | 3 / 0.2 | 2 | 0.41 | 0 % | same, a few shots on the way |
+| D `point_v1_damage` | armed | – | 3.7 s | 17 / 2.5 | 32 | 0.00 | 2 % | sprint toward the point, brawl 10 u short of it, lose |
+| E `point_v2` | armed | – | 17.7 s | 67 / 5.2 | 68 | 0.00 | 18 % | never approaches the point; retreats while shooting (kiting), still improving at 400k |
+
+Why A-D collapse to "rush and die": `goal_progress` is potential-based and gets banked in the
+first 2 s (+1.4), and death *ends* the `enemy_at_goal` stream, so dying on the point right after
+banking the progress is the best return (~1.2) reachable without already knowing how to fight.
+Staying alive on the point with enemies around costs -0.02 x pressure per step, i.e. more than
+the hold bonus. The pressure term cannot teach shooting by itself: the credit path
+(gun -> aim -> ~8 hits -> enemy dead -> penalty gone) is far too long for exploration.
+
+`point_v2` keeps only the non-bankable terms — hold (+), enemy-at-point (-), damage dealt (+) —
+and makes death (-1) cost more than any pressure stream, which orders the options as
+fight > flee > suicide. With guns in hand that is enough to start learning a real aim-and-fire
+behaviour against moving targets on the random layout (run E: 8 -> 68 damage per agent over
+400k steps, no spawn-direction exploit possible), but the agent then ignores the point: approaching
+it means approaching the chasers. Farming never appears in any run because the kit is only picked
+up by chance.
+
+What this says about "can a completely simple reward get farm -> fight": not in one stage. The
+minimal path that is consistent with the evidence is a curriculum with the same two-to-four
+terms and one change per stage: (1) armed + random layout + `damage_dealt`/`death` until the
+kiting fighter is stable (run E, more steps; 4 bridge processes on the Windows box make 2M steps
+~15 min); (2) `--resume` it with fists + `--auto-pickup` — damage is now only reachable through
+the kit, so farming is the first thing it has to learn; (3) add `goal_hold` / `enemy_at_goal` to
+pull the fight onto the point. Spawn randomization stays on everywhere.
 
 ## Interpretations of the spec made here (to align with the bridge)
 
