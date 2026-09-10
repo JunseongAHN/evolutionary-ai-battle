@@ -22,9 +22,12 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
+from ..core.harness_metrics import compute_metrics
+from ..core.schema_validation import validate_episode
 from .actions import ActionSpace
 from .env import EnvConfig, SurvevVecEnv, make_vec_env
 from .featurizer import FeaturizerConfig
+from .harness_export import add_final_metrics, to_episode_trajectory
 from .protocol import DEFAULT_BRIDGE_URL, AgentObservation, ObsMessage
 from .rewards import RewardConfig
 
@@ -117,10 +120,13 @@ def run_episodes(
             step_rec: dict[str, Any] = {
                 "t": prev_msgs[i].t,
                 "t_next": new.t,
-                "obs": {
-                    aid: (prev_msgs[i].obs[aid] if full_obs else obs_summary(prev_msgs[i].obs[aid]))
-                    for aid in env.controlled
-                },
+                # full_obs keeps every agent (harness export needs the scripted ones too);
+                # the compact summary stays controlled-only
+                "obs": (
+                    {aid: prev_msgs[i].obs[aid] for aid in prev_msgs[i].agent_ids}
+                    if full_obs
+                    else {aid: obs_summary(prev_msgs[i].obs[aid]) for aid in env.controlled}
+                ),
                 "actions": {
                     aid: {"raw": [int(v) for v in actions[env.row_index(i, aid)]], "cpc": cpc_actions[i][aid]}
                     for aid in env.controlled
@@ -156,6 +162,9 @@ def run_episodes(
                     "metrics": metrics,
                     "pickup": pickup,
                     "steps": partial[i]["steps"],
+                    # steps hold the observation each action was chosen from, so the terminal
+                    # state needs its own slot (harness_export builds post-step snapshots from it)
+                    "final_obs": ({aid: new.obs[aid] for aid in new.agent_ids} if full_obs else None),
                 }
                 episode_counter += 1
                 finished.append(record)
@@ -226,56 +235,6 @@ def print_summary(summary: Mapping[str, Any]) -> None:
         )
 
 
-def to_harness_episode(record: Mapping[str, Any]) -> dict[str, Any]:
-    """Partial mapping of an eval record to the harness ``EpisodeTrajectory`` shape.
-
-    TODO(S6): the full ``EpisodeTrajectory`` (per-step ``BattleSnapshot`` / ``TacticalObservation``
-    / ``BattleAction`` records validated by ``experiment.core.schema_validation.validate_episode``)
-    is produced by the bridge's own JSONL export (PR-S6), which sees every agent's full state.
-    Until then this stub only fills the episode-level fields and ``final_metrics`` (combat /
-    survival / cooperation groups from the bridge metrics); ``steps`` stays empty.
-    """
-    final_metrics: dict[str, Any] = {}
-    for aid, m in (record.get("metrics") or {}).items():
-        final_metrics[aid] = {
-            "agent_id": aid,
-            "team_id": record.get("teams", {}).get(aid, ""),
-            "combat": {
-                "damageDealt": float(m.get("damage_dealt", 0.0)),
-                "damageTaken": float(m.get("damage_taken", 0.0)),
-                "kills": int(m.get("kills", 0)),
-                "shots": int(m.get("shots", 0)),
-                "hits": int(m.get("hits_given", 0)),
-            },
-            "survival": {
-                "survivalTime": float(m.get("survival_time", 0.0)),
-                "aliveAtEnd": bool(m.get("alive_at_end", False)),
-                "downedTime": float(m.get("downed_time", 0.0)),
-                "hpMean": float(m.get("hp_mean", 0.0)),
-                "hpEnd": float(m.get("hp_end", 0.0)),
-                "teamWin": bool(m.get("team_win", False)),
-            },
-            "cooperation": {
-                "applicable": True,
-                "partnerSurvivalTime": float(m.get("partner_survival_time", 0.0)),
-                "partnerHpEnd": float(m.get("partner_hp_end", 0.0)),
-            },
-        }
-    return {
-        "schema_version": "cpc-common-v0",
-        "episode_id": f"survev-{record.get('seed')}-{record.get('episode')}",
-        "config": {
-            "schema_version": "cpc-common-v0",
-            "mode": "duo",
-            "team_count": 2,
-            "players_per_team": 2,
-            "max_steps": int(record.get("length", 0)),
-        },
-        "steps": [],  # TODO(S6): filled from the bridge JSONL export
-        "final_metrics": final_metrics,
-    }
-
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Evaluate a PPO checkpoint vs the scripted chaser.")
     p.add_argument("--checkpoint", default=None, help="checkpoint .pt (omit with --policy random)")
@@ -299,6 +258,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="cpu")
     p.add_argument("--full-obs", action="store_true", help="store full AgentObservations per step")
     p.add_argument("--out", default=None, help="JSONL output path (one record per episode)")
+    p.add_argument(
+        "--harness-jsonl",
+        default=None,
+        help="also write harness EpisodeTrajectory JSONL here (one episode per line, "
+        "validated against the common schema); implies --full-obs",
+    )
     return p
 
 
@@ -367,10 +332,24 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text("", encoding="utf-8")
 
+    harness_path = Path(args.harness_jsonl) if args.harness_jsonl else None
+    if harness_path is not None and harness_path.exists():
+        harness_path.unlink()
+    harness_errors: list[str] = []
+
     def on_episode(rec: dict[str, Any]) -> None:
         if out_path is not None:
             with out_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, default=float) + "\n")
+        if harness_path is not None:
+            episode = to_episode_trajectory(rec, policy_id=args.checkpoint or args.policy)
+            errors = validate_episode(episode)
+            if errors:
+                harness_errors.extend(f"ep{rec['episode']}: {e}" for e in errors[:5])
+            else:
+                add_final_metrics(episode, compute_metrics(episode))
+            with harness_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(episode, default=float) + "\n")
         m = rec["metrics"]
         print(
             f"episode {rec['episode']}: {rec['reason']} winner={rec['winner_team']} t={rec['duration_s']:.1f}s "
@@ -379,7 +358,10 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         )
 
     try:
-        records = run_episodes(env, policy, args.episodes, full_obs=args.full_obs, on_episode=on_episode)
+        records = run_episodes(
+            env, policy, args.episodes, full_obs=args.full_obs or harness_path is not None,
+            on_episode=on_episode,
+        )
     finally:
         env.close()
         if mock is not None:
@@ -389,6 +371,10 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     if out_path is not None:
         out_path.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print(f"wrote {out_path} and {out_path.with_suffix('.summary.json')}")
+    if harness_path is not None:
+        if harness_errors:
+            raise SystemExit("harness export failed schema validation:\n  " + "\n  ".join(harness_errors))
+        print(f"wrote {harness_path} ({len(records)} episodes, validate_episode clean)")
     return summary
 
 

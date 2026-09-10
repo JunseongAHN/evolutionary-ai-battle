@@ -22,7 +22,8 @@ Hard dependencies: `torch`, `numpy`, `websockets` (>= 13; 15.x tested). `pytest`
 | `env.py` | `SurvevVecEnv` (batched step, auto-reset, `infos[row]["episode_metrics"]`), `SurvevSingleEnv`, `EnvConfig`, `make_vec_env` |
 | `ppo.py` | CleanRL-style PPO for MultiDiscrete: `ActorCritic` (obs -> 256 -> 256, one head per dim + value MLP), GAE, clipping, entropy, value clip, adv-norm, grad clip, LR anneal, CSV/JSONL/TensorBoard logging, checkpoints |
 | `train_ppo.py` | training CLI (`--mock` for the in-process mock) |
-| `eval.py` | evaluation CLI: win rate / survival / HP / damage over N episodes + per-episode JSONL, `to_harness_episode()` stub |
+| `eval.py` | evaluation CLI: win rate / survival / HP / damage over N episodes + per-episode JSONL; `--harness-jsonl` also writes validated harness episodes |
+| `harness_export.py` | eval record -> harness `EpisodeTrajectory` (common schema v0): snapshots, per-agent tactical observations, actions (reconstructed for the scripted agents), mapped events |
 | `export_onnx.py` | actor -> ONNX (dynamic batch) + sidecar JSON with head offsets / bins / vector keys |
 | `policy_server.py` | the inverse of the bridge: serves a checkpoint over WebSocket (`reset` / `act` with spec observations -> `CpcAction` wire form) so a live, client-rendered game can ask Python for the agent's actions |
 | `tests/` | pytest suite (< 10 s) |
@@ -213,10 +214,18 @@ not a physics clone: expect numbers (TTK, hit rates, timings) to differ from the
   side re-implements `featurizer.py` from `vector_keys` (same order), runs the session,
   and per head samples/argmaxes `logits[offset:offset+size]`; move via `move_vectors`,
   aim via `aim_bins`, fire/interact as booleans, then applies the same assist rules.
-* **Harness export.** `eval.py` writes per-episode JSONL (`obs` summaries or full
-  observations with `--full-obs`, raw + `CpcAction` actions, rewards, events, metrics);
-  `to_harness_episode()` maps the episode-level fields and `final_metrics` into the
-  `EpisodeTrajectory` shape and leaves `steps` for the bridge's S6 JSONL export.
+* **Harness export (S6 / M8).** `eval.py` writes per-episode JSONL (`obs` summaries, or
+  full observations for every agent with `--full-obs`, raw + `CpcAction` actions, rewards,
+  events, metrics). `--harness-jsonl PATH` additionally runs each episode through
+  `harness_export.to_episode_trajectory()` -> `core.schema_validation.validate_episode()` ->
+  `core.harness_metrics.compute_metrics()` and writes one common-schema `EpisodeTrajectory`
+  per line, with the four metric groups in `final_metrics`; a schema error fails the run
+  rather than writing silently-broken data. Three mapping decisions are documented in
+  `harness_export.py`: enemy `hp` is omitted rather than faked (a client is never told it),
+  the observation `vector` is a small diagnostic one instead of the policy's 216-d features
+  (so the export does not depend on a featurizer or its per-agent memory), and the scripted
+  agents' actions are reconstructed from the world (aim from facing, move from travel, fire
+  from the fire events) because Python only issues actions for the controlled pair.
 
 ## What the mock runs showed (CPU, 200-300k agent steps, 8 envs)
 

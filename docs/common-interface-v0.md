@@ -37,6 +37,8 @@ This supports both human-readable tactical inspection and later tensor conversio
 
 Rewards are optional in `MultiAgentStep`. Metric-vector evaluation is primary and remains in `info.metrics` or `final_metrics`.
 
+`experiment/core/harness_metrics.compute_metrics(episode)` computes that vector from a serialized episode: four independent groups per agent (combat, survival, cooperation, movement) read off the per-step `info.snapshot` and its events, so any producer of the schema can be measured the same way. Its cooperation thresholds are options with survev-derived defaults (support distance 18 u = a player's view-rectangle half-height, isolation 48 u = the gunshot audible radius, threat 30 u = the scripted bots' fire range).
+
 Combat, survival, cooperation, and movement metrics stay separate. The schema does not collapse evaluation into a scalar reward.
 
 ## Solo And Duo Modes
@@ -85,4 +87,23 @@ action_tensor = stack([
 - TypeScript validation: `src/common/schemaValidation.ts`
 - Python dataclasses: `experiment/core/schema.py`
 - Python validation: `experiment/core/schema_validation.py`
+- Python metric vector: `experiment/core/harness_metrics.py`
+- survev bridge exporter: `experiment/survev_rl/harness_export.py` (`eval.py --harness-jsonl`)
 - Sample episode JSONL: `experiment/core/examples/sample_episode_v0.jsonl`
+
+## Producer Notes (survev bridge)
+
+Two fields deviate from the TypedDicts on purpose, and a test pins each one.
+
+`EntityObservation.hp` is **omitted** for `visible_enemies`. The survev bridge never reports an
+enemy's HP because a human client is not told it, so absence is the honest encoding of unknown;
+`visible_allies` keep their `hp`, which group status does carry. `validate_episode` checks which
+keys are allowed, not which are present, so an omitted optional field is valid.
+
+`info.snapshot` is the state the step **ended** in, while `observations` is the state each action
+was chosen from. That is the gym convention (`info` describes the transition's outcome) and it is
+what makes `survival.aliveAtEnd` / `hpEnd` correct for an agent that died on the last step.
+
+`AgentSnapshot` also carries `armed`, which is not in the schema. `harness_metrics` needs it to
+tell a wasted shot from a melee swing: an unarmed "fire" is a punch and produces no fire event, so
+counting it would report a whole fists episode as wasted shots.
