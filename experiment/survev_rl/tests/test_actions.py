@@ -72,24 +72,37 @@ def test_auto_pickup_assist(spec_obs):
 
 
 def test_skill_mode_mapping(spec_obs):
+    """Skill mode emits what the server's System 1 executes; params name agents by agent id."""
     space = ActionSpace(mode="skill")
     assert space.nvec == (len(SKILLS),) == (7,) and space.dims == ("skill",)
     with pytest.raises(NotImplementedError):
         space.to_cpc_action([0], spec_obs)
+
     assert space.to_skill_action(SKILLS.index("engage"), spec_obs) == {
         "skill": "engage", "params": {"target": "team-b-0", "style": "hold_angle"}
     }
-    assert space.to_skill_action([SKILLS.index("move_to_partner")], spec_obs)["params"] == {"target": "team-a-1", "distance": 6.0}
-    assert space.to_skill_action(SKILLS.index("loot_nearest"), spec_obs)["params"] == {"target": 512, "type": "bandage"}
-    assert space.to_skill_action(SKILLS.index("take_cover"), spec_obs)["params"] == {"cover": 77, "face": "team-b-0"}
-    assert space.to_skill_action(SKILLS.index("retreat"), spec_obs)["params"] == {"away_from": "team-b-0", "distance": 30.0}
+    assert space.to_skill_action([SKILLS.index("follow")], spec_obs)["params"] == {
+        "target": "team-a-1", "distance": 6.0
+    }
+    # loot and heal let the skill decide what it needs next
+    assert space.to_skill_action(SKILLS.index("loot"), spec_obs)["params"] == {}
+    assert space.to_skill_action(SKILLS.index("heal"), spec_obs)["params"] == {}
+    assert space.to_skill_action(SKILLS.index("retreat"), spec_obs)["params"] == {
+        "away_from": "team-b-0", "distance": 30.0
+    }
+    # move_to falls back to the nearest loot when there is no objective to run for
+    assert space.to_skill_action(SKILLS.index("move_to"), spec_obs)["params"] == {
+        "pos": {"x": 110.4, "y": 128.8}
+    }
     assert space.to_skill_action(SKILLS.index("revive"), spec_obs)["params"] == {}  # nobody downed
     spec_obs["teammates"][0]["downed"] = True
     assert space.to_skill_action(SKILLS.index("revive"), spec_obs)["params"] == {"target": "team-a-1"}
-    hold = space.to_skill_action(SKILLS.index("hold"), spec_obs)
-    assert hold["skill"] == "hold" and hold["params"]["face"] == "team-b-0"
-    assert space.to_skill_action(0, None) == {"skill": "move_to_partner", "params": {}}
-    assert space.describe([2]) == {"skill": "engage"}
+
+    assert space.to_skill_action(0, None) == {"skill": "move_to", "params": {}}
+    assert space.describe([SKILLS.index("engage")]) == {"skill": "engage"}
+    # to_wire_action is the one the env calls: a skill request here, raw inputs in primitive mode
+    assert space.to_wire_action(SKILLS.index("engage"), spec_obs)["skill"] == "engage"
+    assert "move" in ActionSpace().to_wire_action([1, 0, 0, 0], spec_obs)
     with pytest.raises(ValueError):
         space.to_skill_action(7, spec_obs)
 

@@ -849,6 +849,7 @@ class FieldSim:
             self._record_damage(target, source, amount)
             self.events.append(
                 {"type": "damage", "t": self.t, "agent": target.id, "source": source_id, "weapon": weapon,
+                 "damage_type": "player",  # the sim only models player fire
                  "amount": round(amount, 3), "hp_before": round(hp_before, 3),
                  "hp_after": round(target.hp, 3), "downed": target.downed, "dead": False, "pos": pos}
             )
@@ -867,6 +868,7 @@ class FieldSim:
             target.held.fire_hold = False
             self.events.append(
                 {"type": "damage", "t": self.t, "agent": target.id, "source": source_id, "weapon": weapon,
+                 "damage_type": "player",  # the sim only models player fire
                  "amount": round(amount, 3), "hp_before": round(hp_before, 3), "hp_after": 0.0,
                  "downed": True, "dead": False, "pos": pos}
             )
@@ -874,6 +876,7 @@ class FieldSim:
             return
         self.events.append(
             {"type": "damage", "t": self.t, "agent": target.id, "source": source_id, "weapon": weapon,
+                 "damage_type": "player",  # the sim only models player fire
              "amount": round(amount, 3), "hp_before": round(hp_before, 3), "hp_after": 0.0,
              "downed": target.downed, "dead": True, "pos": pos}
         )

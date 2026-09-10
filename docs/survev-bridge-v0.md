@@ -101,6 +101,42 @@ whole team is downed/dead (engine semantics: last teammate death kills the downe
   or a scope id to switch scopes (`"2xscope"`).
 - Response: an `obs` message.
 
+### step with skills (System 1)
+
+Instead of raw inputs, a controlled agent can be sent a **skill**, which the server executes every
+tick until another action replaces it:
+
+```json
+{"type": "step", "env_id": 0, "ticks": 10,
+ "actions": {"team-a-0": {"skill": "move_to", "params": {"pos": {"x": 150, "y": 118}}},
+             "team-a-1": {"skill": "follow", "params": {"target": "team-a-0", "distance": 4}}}}
+```
+
+This is the interface System 2 (the SLM planner) uses: it emits one intent and commits to it, and
+the server turns that into inputs 100 times a second, so the model is never on the path of aiming
+and dodging. Sending raw inputs for an agent drops whatever skill it was running.
+
+| skill | params | done when | fails when |
+|---|---|---|---|
+| `move_to` | `pos` `{x,y}`, `arrive?` (u, default 2), `face?` `{x,y}` | within `arrive` of `pos` | — |
+| `follow` | `target` (agent id), `distance?` (default 6) | never — it holds station | the teammate is dead |
+| `loot` | `type?` (item id; omit for "whatever I need next": a gun, then ammo) | nothing is wanted | that type is not on the ground |
+| `heal` | `item?` (default: healthkit, else bandage) | HP is full | there is no such item |
+| `engage` | `target` (agent id), `style?` `push` \| `hold_angle` \| `trade` | the target is dead | — |
+| `retreat` | `away_from?` (agent id), `distance?` (default 30 u) | `distance` is open | — |
+| `revive` | `target` (agent id) | the teammate is standing | it died first |
+
+Agents are named by agent id and points by `{x, y}`; the server resolves them. A malformed request
+(missing `pos`, an unknown agent id, a `style` outside the three) comes back as an `error` message
+naming the field, and the env keeps running. A dead or downed agent runs no skill.
+
+The status of every committed skill rides in `info.skills` (below) — that is the interrupt half of
+the loop, and it is why `ticks` can stay at the policy cadence while the skill runs at tick rate.
+
+Motor constraints for the controlled agents' skills are set once at `reset` with
+`options.humanization` (`aimNoiseDeg`, `reactionDelay`, `pathJitterDeg`) — the same three axes
+`scriptedOptions` gives the opponents, so a teammate and an enemy can be made equally imperfect.
+
 ### step (batched)
 
 ```json
@@ -128,12 +164,16 @@ all its envs.
  "teams": {"team-a-0": "team-a", "team-a-1": "team-a", "team-b-0": "team-b", "team-b-1": "team-b"},
  "obs": {"team-a-0": <AgentObservation>, ...},
  "events": [<Event>, ...],
- "info": {"alive_teams": 2, "winner_team": null, "reason": null, "metrics": null}}
+ "info": {"alive_teams": 2, "winner_team": null, "reason": null, "metrics": null, "skills": null}}
 ```
 
 - `obs` is returned for every agent (controlled and scripted) so logs are complete.
 - `events` are the fire / damage / down / kill events that happened during this step (see
   below); `t` is game time in seconds since reset.
+- `info.skills` is `null` until a controlled agent is given a skill; then it is
+  `{"team-a-0": {"skill": "move_to", "done": true}}`, with `"failed": "no healing item"` when the
+  skill could not run. It is controller state, not world state, which is why it sits in `info`
+  rather than in an agent's observation.
 - When `done` is true: `info.winner_team` is `"team-a"`, `"team-b"` or `null` (time limit with
   both alive; in race mode the team with more captures, null on a tie), `info.reason` is
   `"elimination"`, `"time_limit"` or `"controlled_dead"`, and `info.metrics` holds per agent metrics

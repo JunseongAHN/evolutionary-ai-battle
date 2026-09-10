@@ -237,7 +237,8 @@ class SurvevVecEnv:
             per_agent = {}
             for j, aid in enumerate(self.controlled):
                 row = i * self.n_controlled + j
-                per_agent[aid] = self.action_space.to_cpc_action(actions[row], prev.obs[aid])
+                # primitive rows become raw inputs, skill rows become {skill, params}
+                per_agent[aid] = self.action_space.to_wire_action(actions[row], prev.obs[aid])
             batch[self.env_id(i)] = (per_agent, self.ticks)
         results = self.client.step_batch(batch)
 

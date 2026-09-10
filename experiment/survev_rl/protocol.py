@@ -514,6 +514,9 @@ class ObsInfo:
     reason: str | None = None  # "elimination" | "time_limit" | "controlled_dead" | None
     metrics: dict[str, Metrics] | None = None
     objective: dict[str, Any] | None = None  # race: {"index", "pos", "radius", "captures": {team: n}}
+    #: System 1: per controlled agent running a skill, {"skill", "done", "failed"?}. The interrupt
+    #: half of the planner loop — controller state, so it rides here and not in an observation.
+    skills: dict[str, dict[str, Any]] | None = None
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any] | None) -> "ObsInfo":
@@ -528,6 +531,7 @@ class ObsInfo:
             reason=data.get("reason"),
             metrics=metrics,
             objective=data.get("objective"),
+            skills=data.get("skills"),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -537,6 +541,7 @@ class ObsInfo:
             "reason": self.reason,
             "metrics": {k: v.to_json() for k, v in self.metrics.items()} if self.metrics else None,
             "objective": self.objective,
+            "skills": self.skills,
         }
 
 

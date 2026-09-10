@@ -19,11 +19,11 @@ whenever loot is within pickup range, making the ``interact`` dimension redundan
 standing enemy — the same exact aim the scripted opponents have, so the policy's job becomes
 *when* to shoot / loot / run rather than hitting a 22.5-degree bin at range.
 
-Skill mode is ``Discrete(len(SKILLS))`` over named skills (``move_to_partner``,
-``loot_nearest``, ``engage``, ``retreat``, ``take_cover``, ``revive``, ``hold``) producing
-``{"skill": name, "params": {...}}``. The bridge does **not** execute skills yet (System 1
-skills land in the TS server later); this module only implements the mapping + tests so
-the PPO code is already shaped for it. ``ActionSpace(mode="skill").to_cpc_action`` raises.
+Skill mode is ``Discrete(len(SKILLS))`` over the System 1 skills the TS server executes —
+``move_to``, ``follow``, ``loot``, ``heal``, ``engage``, ``retreat``, ``revive`` — producing
+``{"skill": name, "params": {...}}``, which the bridge runs every tick until another action
+replaces it (see `docs/survev-bridge-v0.md`). Params name agents by agent id and points by
+``{x, y}``; the server resolves them and reports completion in ``info.skills``.
 """
 
 from __future__ import annotations
@@ -41,14 +41,16 @@ from .protocol import ACTION_NONE, ACTION_RELOAD, AgentObservation, CpcAction
 ActionMode = Literal["primitive", "skill"]
 PRIMITIVE_DIMS: tuple[str, ...] = ("move", "aim", "fire", "interact")
 PRIMITIVE_NVEC: tuple[int, ...] = (MOVE_BINS, AIM_BINS, 2, 2)
+#: The week-2 subset the server implements. `hold` / `peek` / `rotate_zone` / `idle_look` arrive
+#: with cover and the gas schedule; `take_cover` needs obstacles, which the open field has none of.
 SKILLS: tuple[str, ...] = (
-    "move_to_partner",
-    "loot_nearest",
+    "move_to",
+    "follow",
+    "loot",
+    "heal",
     "engage",
     "retreat",
-    "take_cover",
     "revive",
-    "hold",
 )
 GUN_SLOTS = (0, 1)
 
@@ -93,9 +95,7 @@ class ActionSpace:
     def to_cpc_action(self, action: Sequence[int], obs: AgentObservation | None = None) -> CpcAction:
         """Map one policy action row to a ``CpcAction`` (assist inputs need ``obs``)."""
         if self.mode != "primitive":
-            raise NotImplementedError(
-                "skill mode is not executable through the bridge yet; use to_skill_action()"
-            )
+            raise NotImplementedError("skill mode produces a skill request; use to_wire_action()")
         move_bin, aim_bin, fire, interact = self.validate(action)
         mx, my = MOVE_VECTORS[move_bin]
         aim = aim_bin_to_vec(aim_bin, AIM_BINS)
@@ -135,6 +135,13 @@ class ActionSpace:
             raise ValueError(f"skill index {idx} out of range")
         name = SKILLS[idx]
         return {"skill": name, "params": skill_params(name, obs)}
+
+    # -- either mode ----------------------------------------------------------------------
+    def to_wire_action(self, action: Sequence[int] | int, obs: AgentObservation | None = None) -> dict[str, Any]:
+        """What goes into a ``step`` message: raw inputs in primitive mode, a skill request in skill mode."""
+        if self.mode == "skill":
+            return self.to_skill_action(action, obs)
+        return self.to_cpc_action(action, obs).to_json()
 
 
 # --------------------------------------------------------------------------------------
@@ -209,25 +216,26 @@ def skill_params(name: str, obs: AgentObservation | None) -> dict[str, Any]:
     teammates = [t for t in (obs.get("teammates") or []) if not t.get("dead")]
     partner = _nearest(teammates)
     enemy = _nearest([p for p in (obs.get("players") or []) if not p.get("dead")])
-    if name == "move_to_partner":
-        return {"target": partner["id"], "distance": 6.0} if partner else {}
-    if name == "loot_nearest":
+    if name == "move_to":
+        # with no objective to run for, the fallback destination is the nearest loot, then the enemy
         loot = _nearest(obs.get("loot") or [])
-        return {"target": loot["id"], "type": loot["type"]} if loot else {}
+        goal = (loot or enemy or {}).get("pos")
+        return {"pos": dict(goal)} if goal else {"pos": dict(me["pos"])}
+    if name == "follow":
+        return {"target": partner["id"], "distance": 6.0} if partner else {}
+    if name == "loot":
+        # the skill picks what it needs next (gun, then ammo) when no type is named
+        return {}
+    if name == "heal":
+        return {}
     if name == "engage":
         return {"target": enemy["id"], "style": "hold_angle"} if enemy else {}
     if name == "retreat":
         if enemy:
             return {"away_from": enemy["id"], "distance": 30.0}
-        return {"away_from": None, "distance": 30.0}
-    if name == "take_cover":
-        obstacles = [o for o in (obs.get("obstacles") or []) if o.get("collidable")]
-        cover = _nearest(obstacles)
-        return {"cover": cover["id"] if cover else None, "face": enemy["id"] if enemy else None}
+        return {"distance": 30.0}
     if name == "revive":
         downed = [t for t in teammates if t.get("downed")]
         target = _nearest(downed)
         return {"target": target["id"]} if target else {}
-    if name == "hold":
-        return {"face": enemy["id"] if enemy else None, "pos": dict(me["pos"])}
     raise ValueError(f"unknown skill {name!r}")
