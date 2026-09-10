@@ -1,0 +1,13 @@
+{
+  "_comment": "race_v2 with capture doubled (1.0 -> 2.0), the one knob docs/cpc-handoff-gpu.md prescribes when K3/K4 land on \"fights but does not race\" (kills >= 0.3, survival >= 25 s, team_captures < 0.5). Every other term is spelled out because --reward-json merges onto RewardConfig defaults, not onto race_v2: omitting a key silently restores the v0 value (alive_per_step 0.01, hp_delta 0.01, death -1.0, team_win 1.0) instead of the zero race_v2 intends.",
+  "alive_per_step": 0.0,
+  "hp_delta": 0.0,
+  "damage_dealt": 0.02,
+  "damage_taken": 0.0,
+  "kill": 0.0,
+  "death": 0.0,
+  "team_win": 0.0,
+  "capture": 2.0,
+  "enemy_capture": 0.0,
+  "gun_pickup": 1.0
+}

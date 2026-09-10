@@ -157,11 +157,17 @@ nohup python -m experiment.survev_rl.train_ppo --bridge ws://127.0.0.1:8768 $COM
 | 관찰 | 해석 | 다음 행동 |
 |---|---|---|
 | K1–K2 `kills` ≈ 0 그대로 | 스텝은 답이 아니었다(예상) | K1–K2는 1M쯤에서 끊어도 된다(`kill <pid>`; 체크포인트는 10 update마다 저장됨) |
-| K3–K4 `kills` ≥ 0.3, `survival` ≥ 25 s, `team_captures` < 0.5 | K0의 연장: 싸우지만 레이스 안 함 | `capture` 1.0 → 2.0 한 시드 재실행: `--reward-json '{"capture":2.0,"damage_dealt":0.02,"gun_pickup":1.0}'` |
+| K3–K4 `kills` ≥ 0.3, `survival` ≥ 25 s, `team_captures` < 0.5 | K0의 연장: 싸우지만 레이스 안 함 | `capture` 1.0 → 2.0 한 시드 재실행: `--reward-json experiment/survev_rl/configs/race_v2_cap2.json` |
 | K3–K4 `team_captures` ≥ 1.5 이고 `kills` ≥ 0.3 | 합성 성립 | K5 → L로, 렌더로 확인 |
-| `armed` < 0.5 (1M 이후에도) | 줍기가 자리 잡지 못함 | `gun_pickup` 1.0 → 2.0 한 시드 재실행 |
+| `armed` < 0.5 (1M 이후에도) | 줍기가 자리 잡지 못함 | `gun_pickup` 1.0 → 2.0 한 시드 재실행 (`race_v2.json` 사본에서 그 항만 고칠 것 — 아래 주의) |
 | `survival_time` < 10 s 가 계속 | 10 초 안에 racer에게 죽음 | 렌더(§7)로 왜 죽는지 본 뒤 결정 — 보상 손대지 말 것 |
 | 시드 2개가 같은 행동 | 재현됨 | 그 행동을 결과로 기록 |
+
+**`--reward-json`은 항을 덮어쓰는 게 아니라 `RewardConfig` 기본값 위에 얹는다.** 기본값은 v0 보상(`alive_per_step` 0.01,
+`hp_delta` 0.01, `death` −1.0, `team_win` 1.0)이고 `race_v2.json`은 그 넷을 **명시적으로 0으로** 둔다. 그래서 인라인으로 세 항만 주면
+7항 보상이 조용히 돌고(적립되는 생존 보상 + 죽음 페널티가 다시 붙는다) 3항 동결 원칙이 깨지며 K3/K4와 비교도 안 된다. 항을 바꿀 때는
+인라인이 아니라 **`race_v2.json` 사본을 만들어 그 항만 고친다**(`race_v2_cap2.json`이 그 예). 실제로 확인하는 방법은
+`runs/<run>/config.json`의 `meta.reward`에서 0이 아닌 항이 셋뿐인지 보는 것이다.
 
 기준값 근거: 스크립트 racer 혼자면 포인트 하나에 ~4 초(60 초에 ~14개)이고, 지금까지 우리 팀 최고는 chaser 상대 2.8(run F+), racer 상대 1.6(run H),
 K0 eval에서 racer 팀은 에피소드당 1.1개를 가져갔다. `damage_dealt` 20은 ak47 기준 2–3발 명중이다.
