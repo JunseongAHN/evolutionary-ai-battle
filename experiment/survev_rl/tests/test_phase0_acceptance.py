@@ -183,9 +183,15 @@ def test_m7_damage_events_account_for_the_hp_that_was_lost(episode):
             # 0 is legal: `player.damage()` ran but nothing was removed, e.g. a downed player's
             # bleed landing inside `downedDamageBuffer` (source and weapon are null for those)
             assert amount >= 0
+            # every hit says what dealt it, so bleed and gas are not mistaken for a shot
+            assert event["damage_type"] in ("player", "bleeding", "gas", "airdrop", "airstrike")
             if amount == 0:
                 assert after == before
+                # the only absorbed damage in this scenario is a downed player's own bleed
+                assert event["damage_type"] == "bleeding" and event["source"] is None
                 continue
+            if event["damage_type"] == "player":
+                assert event["source"] in message.agent_ids
             # A damage event removes either the HP difference or everything that was left. The
             # second case is not redundant: on the hit that downs a player the engine resets HP
             # to 100 (and it then bleeds), so `hp_after` can be *higher* than `hp_before`, and a

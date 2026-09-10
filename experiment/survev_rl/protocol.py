@@ -434,6 +434,8 @@ class Event(TypedDict, total=False):
     agent: str
     source: str
     weapon: str
+    # damage: what dealt it — "player" | "bleeding" | "gas" | "airdrop" | "airstrike"
+    damage_type: str
     pos: Vec2
     dir: Vec2
     amount: float
