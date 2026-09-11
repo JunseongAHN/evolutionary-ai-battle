@@ -5,7 +5,12 @@ grammar, and record latency, token counts, whether the reply parses into a skill
 and the decision itself so a person can judge whether it fits the situation.
 
     python -m experiment.slm.bench_planner --url http://127.0.0.1:8090 \
-        --blocks /work/out/slm/blocks.json --grammar /work/out/slm/skill.gbnf --runs 3
+        --blocks experiment/slm/cases_v1.json --grammar /work/out/slm/skill.gbnf --runs 10
+
+`cases_v1.json` is the frozen evaluation set: each case carries its state block (with the
+`[can do: ...]` line), the skills the per-question mask allows, and the grammar built from them.
+Do not regenerate it in place — combat is not seeded, so a re-dump captures different situations
+under the same names. Add a `cases_v2.json` instead, and compare versions side by side.
 
 No dependencies beyond the standard library. The prefix is identical on every call on purpose: it is
 what llama-server's prompt cache reuses, so only the block at the end costs prefill.
@@ -85,6 +90,10 @@ PROMPTS = {"ko": KOREAN_PROMPT, "en": ENGLISH_PROMPT}
 #: What a sensible teammate does in each benchmark situation (my judgment, stated so it can be argued
 #: with). The case names come from `blocks.json`; "partner_downed" was captured with the partner
 #: already dead, unarmed, a rifle at its feet and two armed enemies at 22-25 m.
+#:
+#: Bench inputs must be generated once and then frozen: combat is not seeded (M9), so regenerating
+#: them captures a *different* situation under the same name — which is how "partner_downed" came
+#: back as an armed CPC with a live downed teammate, and why that one now has its own name.
 EXPECTED: dict[str, set[str]] = {
     "spawn_unarmed": {"loot"},
     "enemy_in_view_unarmed": {"loot", "retreat"},
@@ -93,7 +102,14 @@ EXPECTED: dict[str, set[str]] = {
     "race_point_quiet": {"move_to"},
     "partner_downed": {"loot", "retreat"},
     # armed, nothing in view, no race point: stay with the human partner
-    "idle_armed_no_point": {"follow"},
+    "idle_armed_no_point": {"follow", "move_to"},
+    # the first playtest: teammate downed 2 m away, an armed enemy at 22 m. The planner revived eight
+    # times and stood still while shot from 68 hp to 1; the right call is to deal with the enemy first
+    "revive_under_fire": {"engage", "retreat"},
+    # re-captured when the bench inputs were regenerated (combat is not seeded, M9): armed, teammate
+    # downed 13 m away, armed enemies at 23 and 27 m — fight first, as in the playtest case
+    "teammate_downed_under_fire": {"engage", "retreat"},
+    "revive_under_fire_unmasked": {"engage", "retreat"},
 }
 
 
@@ -163,6 +179,9 @@ def appropriate(case: str, text: str) -> bool:
         return False
     if case == "race_point_quiet":
         return decision["params"].get("to") == "point"
+    if case == "idle_armed_no_point" and decision["skill"] == "move_to":
+        # walking to the teammate is staying with them too; walking anywhere else is not
+        return decision["params"].get("to") == "team-a-1"
     return True
 
 
@@ -197,7 +216,8 @@ def main() -> None:
         for line in case["block"].splitlines():
             print(f"   {line}")
         for run in range(args.runs):
-            r = call(args.url, case["block"], grammar, args.temperature, args.max_tokens, prompt)
+            # a case may carry its own grammar: the per-question skill mask the game builds
+            r = call(args.url, case["block"], case.get("grammar", grammar), args.temperature, args.max_tokens, prompt)
             ok, why = check(r["text"])
             fit = ok and appropriate(case["name"], r["text"])
             r.update({"case": case["name"], "run": run, "valid": ok, "why": why, "appropriate": fit})
@@ -213,7 +233,9 @@ def main() -> None:
     print(f"\n=== {args.label or args.url}: {len(rows)} decisions ===")
     print(f"valid JSON skill: {valid}/{len(rows)}")
     print(f"appropriate for the situation: {sum(r['appropriate'] for r in rows)}/{len(rows)}")
-    for case in EXPECTED:
+    for case in (c["name"] for c in blocks):
+        if case not in EXPECTED:
+            continue
         picked = [json.loads(r["text"])["skill"] for r in rows if r["case"] == case and r["valid"]]
         print(f"  {case:24s} expected {sorted(EXPECTED[case])}  got {picked}")
     print(f"latency ms: median {statistics.median(walls):.0f}  p90 {sorted(walls)[int(0.9 * (len(walls) - 1))]:.0f}  max {max(walls):.0f}")
