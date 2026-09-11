@@ -32,7 +32,7 @@ SKILLS: dict[str, str] = {
     "revive": 'params {"target": AGENT_ID} - pick up a downed teammate',
 }
 
-SYSTEM_PROMPT = """You are the tactical brain of a teammate in a 2v2 top-down battle royale (surviv.io).
+KOREAN_PROMPT = """You are the tactical brain of a teammate in a 2v2 top-down battle royale (surviv.io).
 A separate motor system aims, moves and shoots every tick; you only choose WHAT to do next.
 
 Read the state block and reply with exactly one JSON decision:
@@ -71,6 +71,17 @@ Examples:
 [point: 40m N (capture it)]
 -> {"skill": "move_to", "params": {"to": "point"}, "commit_ms": 2400, "say": null}"""
 
+#: The same prompt with English chat. Only the utterance language changes — rules, skills and the
+#: examples' decisions are identical — so a difference in judgment is attributable to the language.
+ENGLISH_PROMPT = (
+    KOREAN_PROMPT.replace("SHORT_KOREAN_OR_NULL", "SHORT_ENGLISH_OR_NULL")
+    .replace("an optional short Korean line to your human teammate, under 15 characters",
+             "an optional short English line to your human teammate, under 20 characters")
+    .replace('"say": "북동쪽 하나"', '"say": "one NE"')
+    .replace('"say": "총 주울게"', '"say": "grabbing a gun"')
+)
+PROMPTS = {"ko": KOREAN_PROMPT, "en": ENGLISH_PROMPT}
+
 #: What a sensible teammate does in each benchmark situation (my judgment, stated so it can be argued
 #: with). The case names come from `blocks.json`; "partner_downed" was captured with the partner
 #: already dead, unarmed, a rifle at its feet and two armed enemies at 22-25 m.
@@ -84,10 +95,12 @@ EXPECTED: dict[str, set[str]] = {
 }
 
 
-def call(url: str, block: str, grammar: str, temperature: float, max_tokens: int) -> dict[str, Any]:
+def call(
+    url: str, block: str, grammar: str, temperature: float, max_tokens: int, prompt: str = KOREAN_PROMPT
+) -> dict[str, Any]:
     body = {
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": block},
         ],
         "grammar": grammar,
@@ -159,6 +172,7 @@ def main() -> None:
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--max-tokens", type=int, default=96)
+    ap.add_argument("--say-lang", choices=sorted(PROMPTS), default="ko", help="language of the chat line")
     ap.add_argument("--label", default="")
     ap.add_argument("--out", default=None, help="write every call as JSONL")
     args = ap.parse_args()
@@ -166,7 +180,8 @@ def main() -> None:
     blocks = json.loads(Path(args.blocks).read_text())
     grammar = Path(args.grammar).read_text()
 
-    call(args.url, blocks[0]["block"], grammar, args.temperature, args.max_tokens)  # warm the prefix cache
+    prompt = PROMPTS[args.say_lang]
+    call(args.url, blocks[0]["block"], grammar, args.temperature, args.max_tokens, prompt)  # warm the prefix cache
 
     rows: list[dict[str, Any]] = []
     for case in blocks:
@@ -174,7 +189,7 @@ def main() -> None:
         for line in case["block"].splitlines():
             print(f"   {line}")
         for run in range(args.runs):
-            r = call(args.url, case["block"], grammar, args.temperature, args.max_tokens)
+            r = call(args.url, case["block"], grammar, args.temperature, args.max_tokens, prompt)
             ok, why = check(r["text"])
             fit = ok and appropriate(case["name"], r["text"])
             r.update({"case": case["name"], "run": run, "valid": ok, "why": why, "appropriate": fit})
