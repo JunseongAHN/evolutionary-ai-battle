@@ -92,6 +92,8 @@ EXPECTED: dict[str, set[str]] = {
     "taking_fire": {"engage", "retreat"},
     "race_point_quiet": {"move_to"},
     "partner_downed": {"loot", "retreat"},
+    # armed, nothing in view, no race point: stay with the human partner
+    "idle_armed_no_point": {"follow"},
 }
 
 
@@ -173,6 +175,12 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--max-tokens", type=int, default=96)
     ap.add_argument("--say-lang", choices=sorted(PROMPTS), default="ko", help="language of the chat line")
+    ap.add_argument(
+        "--prompt-file",
+        default=None,
+        help="the planner prompt the game actually sends (dumped from survev's plannerPrompt.ts); "
+        "overrides the built-in copy so a prompt measured is the prompt played",
+    )
     ap.add_argument("--label", default="")
     ap.add_argument("--out", default=None, help="write every call as JSONL")
     args = ap.parse_args()
@@ -180,7 +188,7 @@ def main() -> None:
     blocks = json.loads(Path(args.blocks).read_text())
     grammar = Path(args.grammar).read_text()
 
-    prompt = PROMPTS[args.say_lang]
+    prompt = Path(args.prompt_file).read_text(encoding="utf-8") if args.prompt_file else PROMPTS[args.say_lang]
     call(args.url, blocks[0]["block"], grammar, args.temperature, args.max_tokens, prompt)  # warm the prefix cache
 
     rows: list[dict[str, Any]] = []
