@@ -118,7 +118,7 @@ and dodging. Sending raw inputs for an agent drops whatever skill it was running
 
 | skill | params | done when | fails when |
 |---|---|---|---|
-| `move_to` | `pos` `{x,y}`, `arrive?` (u, default 2), `face?` `{x,y}` | within `arrive` of `pos` | — |
+| `move_to` | `to` (`"point"`, an agent id, or `"loot:<type>"`) **or** `pos` `{x,y}`; `arrive?` (u, default 2), `face?` `{x,y}` | within `arrive` of the place | — |
 | `follow` | `target` (agent id), `distance?` (default 6) | never — it holds station | the teammate is dead |
 | `loot` | `type?` (item id; omit for "whatever I need next": a gun, then ammo) | nothing is wanted | that type is not on the ground |
 | `heal` | `item?` (default: healthkit, else bandage) | HP is full | there is no such item |
@@ -126,7 +126,10 @@ and dodging. Sending raw inputs for an agent drops whatever skill it was running
 | `retreat` | `away_from?` (agent id), `distance?` (default 30 u) | `distance` is open | — |
 | `revive` | `target` (agent id) | the teammate is standing | it died first |
 
-Agents are named by agent id and points by `{x, y}`; the server resolves them. A malformed request
+Agents are named by agent id and points by `{x, y}`; the server resolves them. `move_to.to` is
+how the planner should name a place — the same words the state block uses — and it is resolved
+against **that agent's own observation**, so an enemy off screen or an item not in view cannot be a
+destination (the request is rejected). `pos` stays for programmatic callers. A malformed request
 (missing `pos`, an unknown agent id, a `style` outside the three) comes back as an `error` message
 naming the field, and the env keeps running. A dead or downed agent runs no skill.
 

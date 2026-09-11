@@ -23,9 +23,9 @@ from typing import Any
 
 #: The seven skills the server implements, with the params the grammar allows.
 SKILLS: dict[str, str] = {
-    "move_to": 'params {"pos": {"x": X, "y": Y}} - walk to a point (world coordinates, y grows north)',
+    "move_to": 'params {"to": "point" | AGENT_ID | "loot:ITEM"} - walk to the race point, a player, or a listed item',
     "follow": 'params {"target": AGENT_ID, "distance": N} - stay near a teammate',
-    "loot": "params {} - pick up what you need next: a gun, then ammo for it",
+    "loot": "params {} - pick up a gun if you have none, or ammo if your gun is empty; does nothing otherwise",
     "heal": "params {} - use a bandage or healthkit until hp is full",
     "engage": 'params {"target": AGENT_ID, "style": "push"|"hold_angle"|"trade"} - fight an enemy',
     "retreat": 'params {"away_from": AGENT_ID, "distance": N} - back off from a threat',
@@ -42,12 +42,46 @@ Skills:
 """ + "\n".join(f"- {name}: {desc}" for name, desc in SKILLS.items()) + """
 
 Rules:
-- The state block is the only ground truth. Never name an enemy that is not listed.
-- Without a gun you deal almost no damage at range: get one before a fight unless the enemy is on top of you.
-- A downed teammate dies unless revived; revive when no enemy is close.
-- commit_ms is how long you keep this decision (300-3000). Shorter when the situation is changing fast.
-- "say" is an optional short Korean chat line to your human teammate (under 15 characters), or null.
-- Directions are compass points: N is up the screen."""
+- The state block is the only ground truth. Never name an enemy or item that is not listed.
+- Armed and an enemy is seen: engage it. Retreat instead only when you are under 30hp.
+- Unarmed: loot a gun first, unless an enemy is within 3m - then engage with your fists.
+- loot is useless when you already have a gun with ammo.
+- A DOWNED teammate dies unless revived: revive when no enemy is within 25m.
+- Under 50hp and no enemy seen: heal.
+- Nothing to fight and a race point is listed: move_to "point".
+- commit_ms: short (300-600) in a fight, long (1800-3000) when it is quiet.
+- say: an optional short Korean line to your human teammate, under 15 characters, or null.
+- Directions are compass points: N is up the screen.
+
+Examples:
+[t=12s you=team-a-0 88hp]
+[weapon: mp5 22/60 | scope 1xscope]
+[teammate team-a-1: 70hp, 9m W]
+[enemies seen: team-b-1 18m NE ak47]
+-> {"skill": "engage", "params": {"target": "team-b-1", "style": "hold_angle"}, "commit_ms": 600, "say": "북동쪽 하나"}
+
+[t=2s you=team-a-0 100hp]
+[weapon: fists (no gun) | scope 1xscope]
+[loot: ak47 6m E, 762mm x45 7m E]
+-> {"skill": "loot", "params": {}, "commit_ms": 1200, "say": "총 주울게"}
+
+[t=30s you=team-a-0 90hp]
+[weapon: ak47 25/60 | scope 1xscope]
+[teammate team-a-1: 80hp, 5m S]
+[point: 40m N (capture it)]
+-> {"skill": "move_to", "params": {"to": "point"}, "commit_ms": 2400, "say": null}"""
+
+#: What a sensible teammate does in each benchmark situation (my judgment, stated so it can be argued
+#: with). The case names come from `blocks.json`; "partner_downed" was captured with the partner
+#: already dead, unarmed, a rifle at its feet and two armed enemies at 22-25 m.
+EXPECTED: dict[str, set[str]] = {
+    "spawn_unarmed": {"loot"},
+    "enemy_in_view_unarmed": {"loot", "retreat"},
+    "enemy_in_view_armed": {"engage"},
+    "taking_fire": {"engage", "retreat"},
+    "race_point_quiet": {"move_to"},
+    "partner_downed": {"loot", "retreat"},
+}
 
 
 def call(url: str, block: str, grammar: str, temperature: float, max_tokens: int) -> dict[str, Any]:
@@ -102,7 +136,19 @@ def check(text: str) -> tuple[bool, str]:
         return False, "params is not an object"
     if not isinstance(decision.get("commit_ms"), int):
         return False, "commit_ms missing"
+    if decision["skill"] == "move_to" and "to" not in decision["params"]:
+        return False, "move_to without a named target"
     return True, "ok"
+
+
+def appropriate(case: str, text: str) -> bool:
+    """Right skill for the situation; the race case also has to head for the point."""
+    decision = json.loads(text)
+    if decision["skill"] not in EXPECTED.get(case, set()):
+        return False
+    if case == "race_point_quiet":
+        return decision["params"].get("to") == "point"
+    return True
 
 
 def main() -> None:
@@ -130,9 +176,11 @@ def main() -> None:
         for run in range(args.runs):
             r = call(args.url, case["block"], grammar, args.temperature, args.max_tokens)
             ok, why = check(r["text"])
-            r.update({"case": case["name"], "run": run, "valid": ok, "why": why})
+            fit = ok and appropriate(case["name"], r["text"])
+            r.update({"case": case["name"], "run": run, "valid": ok, "why": why, "appropriate": fit})
             rows.append(r)
-            print(f"   -> {r['wall_ms']:5.0f} ms  {'OK ' if ok else 'BAD'}  {r['text']}")
+            flat = " ".join(r["text"].split())
+            print(f"   -> {r['wall_ms']:5.0f} ms  {'OK ' if ok else 'BAD'} {'fit' if fit else '---'}  {flat}")
 
     walls = [r["wall_ms"] for r in rows]
     valid = sum(r["valid"] for r in rows)
@@ -141,6 +189,10 @@ def main() -> None:
     prompt = [r["prompt_tokens"] for r in rows if r["prompt_tokens"]]
     print(f"\n=== {args.label or args.url}: {len(rows)} decisions ===")
     print(f"valid JSON skill: {valid}/{len(rows)}")
+    print(f"appropriate for the situation: {sum(r['appropriate'] for r in rows)}/{len(rows)}")
+    for case in EXPECTED:
+        picked = [json.loads(r["text"])["skill"] for r in rows if r["case"] == case and r["valid"]]
+        print(f"  {case:24s} expected {sorted(EXPECTED[case])}  got {picked}")
     print(f"latency ms: median {statistics.median(walls):.0f}  p90 {sorted(walls)[int(0.9 * (len(walls) - 1))]:.0f}  max {max(walls):.0f}")
     if tps:
         print(f"decode tok/s: median {statistics.median(tps):.0f}")
