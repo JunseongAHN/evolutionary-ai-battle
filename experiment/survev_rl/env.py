@@ -18,6 +18,7 @@ agent is controlled an agent-id one-hot is appended to the observation.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
@@ -44,6 +45,12 @@ class EnvConfig:
     map_size: int = 128
     loadout: str = "fists"  # "armed" = spawn with an ak47 (curriculum; mock + bridge extension)
     layout: str = "fixed"  # "random" = seeded spawn rotation/distance (bridge option, see survev-bridge-v0.md)
+    # bullet-stopping cover between the duos: "sparse" | "default" | "dense". The open field is the
+    # default because every earlier number (v0, the PPO runs) was measured without obstacles.
+    cover: str = "none"
+    # intents the controller is trained to obey; one is drawn per episode and held for it. Empty
+    # leaves the vector as it was — the policy then fights however it likes.
+    intents: tuple[str, ...] = ()
     goal: tuple[float, float] | None = None  # fixed waypoint for the goal block / waypoint rewards (world x, y)
     objective: dict[str, Any] | None = None  # e.g. {"mode": "race", "radius": 4, "minDist": 30, "maxDist": 70}
     end_on_elimination: bool = True  # False: run to the time limit after a wipe (race), end when controlled agents are dead
@@ -101,6 +108,8 @@ class SurvevVecEnv:
         validate: bool = True,
         loadout: str = "fists",
         layout: str = "fixed",
+        cover: str = "none",
+        intents: Sequence[str] = (),
         goal: tuple[float, float] | None = None,
         objective: Mapping[str, Any] | None = None,
         end_on_elimination: bool = True,
@@ -120,18 +129,31 @@ class SurvevVecEnv:
         self.map_size = int(map_size)
         self.loadout = str(loadout)
         self.layout = str(layout)
+        self.cover = str(cover)
+        self.intents = tuple(intents)
+        #: the intent each env is playing under this episode, by env index
+        self.env_intents: list[str | None] = [None] * int(n_envs)
         self.goal = (float(goal[0]), float(goal[1])) if goal is not None else None
         self.objective = dict(objective) if objective else None
         self.end_on_elimination = bool(end_on_elimination)
         self.scripted_options = dict(scripted_options) if scripted_options else None
         self.env_id_offset = int(env_id_offset)
+        self.base_seed = int(base_seed)
         self.seed_fn = seed_fn or default_seed_fn(base_seed, self.n_envs)
         self.featurizer = featurizer or Featurizer(FeaturizerConfig(time_limit=self.time_limit))
         self.action_space = action_space or ActionSpace()
         self.reward_config = reward_config or RewardConfig()
-        self.client = BridgeClient(
-            bridge_url, connect_timeout=connect_timeout, timeout=step_timeout, validate=validate
-        )
+        # A bridge is one Node process running its games on one core, so a run's wall clock is set by
+        # how many bridges it spreads its envs over, not by the GPU (measured: 128 cores, load 3.3,
+        # GPU at 26% with a single bridge). `bridge_url` may name several, comma-separated.
+        urls = [u.strip() for u in str(bridge_url).split(",") if u.strip()] or [DEFAULT_BRIDGE_URL]
+        self.bridge_urls = urls
+        self.clients = [
+            BridgeClient(url, connect_timeout=connect_timeout, timeout=step_timeout, validate=validate)
+            for url in urls
+        ]
+        #: which client owns each env, round-robin: env 0 -> bridge 0, env 1 -> bridge 1, ...
+        self._client_of = [i % len(self.clients) for i in range(int(n_envs))]
         self.n_rows = self.n_envs * self.n_controlled
         self.agent_onehot_dim = self.n_controlled if self.n_controlled > 1 else 0
         self.obs_dim = self.featurizer.size + self.agent_onehot_dim
@@ -166,18 +188,23 @@ class SurvevVecEnv:
 
     def _reset_env(self, i: int) -> ObsMessage:
         seed = self.seed_fn(i, self.episode_index[i])
+        if self.intents:
+            draw = np.random.default_rng([self.base_seed, i, self.episode_index[i]])
+            self.env_intents[i] = self.intents[int(draw.integers(len(self.intents)))]
         extra: dict[str, Any] = {}  # spec options only by default
         if self.loadout != "fists":
             extra["loadout"] = self.loadout
         if self.layout != "fixed":
             extra["layout"] = self.layout
+        if self.cover != "none":
+            extra["cover"] = self.cover
         if self.objective:
             extra["objective"] = dict(self.objective)
         if not self.end_on_elimination:
             extra["endOnElimination"] = False
         if self.scripted_options:
             extra["scriptedOptions"] = dict(self.scripted_options)
-        msg = self.client.reset(
+        msg = self.clients[self._client_of[i]].reset(
             self.env_id(i),
             scenario=self.scenario,
             seed=seed,
@@ -207,7 +234,9 @@ class SurvevVecEnv:
 
     def _featurize_env(self, i: int, msg: ObsMessage, out: np.ndarray) -> None:
         for j, aid in enumerate(self.controlled):
-            vec = self.featurizer.featurize(msg.obs[aid], msg.t, self._memories[i][aid], goal=self.goal)
+            vec = self.featurizer.featurize(
+                msg.obs[aid], msg.t, self._memories[i][aid], goal=self.goal, intent=self.env_intents[i]
+            )
             row = i * self.n_controlled + j
             out[row, : self.featurizer.size] = vec
             if self.agent_onehot_dim:
@@ -240,7 +269,25 @@ class SurvevVecEnv:
                 # primitive rows become raw inputs, skill rows become {skill, params}
                 per_agent[aid] = self.action_space.to_wire_action(actions[row], prev.obs[aid])
             batch[self.env_id(i)] = (per_agent, self.ticks)
-        results = self.client.step_batch(batch)
+        # One round trip per bridge, issued at the same time. The client is blocking — it sends and
+        # then waits for the reply — so calling the bridges in a loop would leave each one idle while
+        # another answered: four bridges measured *slower* than one that way (811 vs 963 steps/s).
+        # A thread per bridge is what makes the games actually overlap; they are waiting on a socket,
+        # so the GIL is not in the way.
+        shares = [
+            {
+                env_id: payload for env_id, payload in batch.items()
+                if self._client_of[env_id - self.env_id(0)] == index
+            }
+            for index in range(len(self.clients))
+        ]
+        results: dict[int, ObsMessage] = {}
+        if len(self.clients) == 1:
+            results.update(self.clients[0].step_batch(shares[0]))
+        else:
+            with ThreadPoolExecutor(max_workers=len(self.clients)) as pool:
+                for part in pool.map(lambda pair: pair[0].step_batch(pair[1]), zip(self.clients, shares)):
+                    results.update(part)
 
         obs = np.zeros((self.n_rows, self.obs_dim), dtype=np.float32)
         rewards = np.zeros(self.n_rows, dtype=np.float32)
@@ -251,7 +298,8 @@ class SurvevVecEnv:
             new = results[self.env_id(i)]
             self.step_messages[i] = new
             breakdown = compute_reward_breakdown(
-                prev.obs, new.obs, new.events, new.info, self.reward_config, self.controlled, t=new.t, goal=self.goal
+                prev.obs, new.obs, new.events, new.info, self.reward_config, self.controlled, t=new.t,
+                goal=self.goal, intent=self.env_intents[i],
             )
             for j, aid in enumerate(self.controlled):
                 row = i * self.n_controlled + j
@@ -318,9 +366,11 @@ class SurvevVecEnv:
 
     def close(self) -> None:
         try:
-            self.client.close_all()
+            for client in self.clients:
+                client.close_all()
         finally:
-            self.client.disconnect()
+            for client in self.clients:
+                client.disconnect()
 
     def __enter__(self) -> "SurvevVecEnv":
         return self
@@ -380,6 +430,8 @@ def make_vec_env(
         scripted=env_cfg.scripted,
         time_limit=env_cfg.time_limit,
         layout=env_cfg.layout,
+        cover=env_cfg.cover,
+        intents=env_cfg.intents,
         goal=env_cfg.goal,
         objective=env_cfg.objective,
         end_on_elimination=env_cfg.end_on_elimination,

@@ -96,20 +96,27 @@ PROMPTS = {"ko": KOREAN_PROMPT, "en": ENGLISH_PROMPT}
 #: back as an armed CPC with a live downed teammate, and why that one now has its own name.
 EXPECTED: dict[str, set[str]] = {
     "spawn_unarmed": {"loot"},
-    "enemy_in_view_unarmed": {"loot", "retreat"},
+    # 준성 2026-09-12: unarmed against a gun, either answer is a real one — grab a gun and back off,
+    # or close with fists so the pair fights together rather than one at a time
+    "enemy_in_view_unarmed": {"loot", "retreat", "engage"},
     "enemy_in_view_armed": {"engage"},
+    # 준성 2026-09-12: engage or retreat is a judgement call that needs the whole picture — where the
+    # race point is, hp, what the enemy carries, what you carry. Both stay accepted, so this case and
+    # teammate_downed_under_fire separate models only weakly; behaviour in play decides them, not this key
     "taking_fire": {"engage", "retreat"},
     "race_point_quiet": {"move_to"},
     "partner_downed": {"loot", "retreat"},
     # armed, nothing in view, no race point: stay with the human partner
     "idle_armed_no_point": {"follow", "move_to"},
     # the first playtest: teammate downed 2 m away, an armed enemy at 22 m. The planner revived eight
-    # times and stood still while shot from 68 hp to 1; the right call is to deal with the enemy first
-    "revive_under_fire": {"engage", "retreat"},
+    # times and stood still while shot from 68 hp to 1. 준성 2026-09-12: reviving next to an enemy kills
+    # both of you, so the answer is to fight — retreat abandons the downed teammate and is not accepted
+    "revive_under_fire": {"engage"},
     # re-captured when the bench inputs were regenerated (combat is not seeded, M9): armed, teammate
-    # downed 13 m away, armed enemies at 23 and 27 m — fight first, as in the playtest case
+    # downed 13 m away, armed enemies at 23 and 27 m. Judgement call as above; both accepted
     "teammate_downed_under_fire": {"engage", "retreat"},
-    "revive_under_fire_unmasked": {"engage", "retreat"},
+    # same situation as revive_under_fire, with no mask: the control. Same answer — fight
+    "revive_under_fire_unmasked": {"engage"},
 }
 
 

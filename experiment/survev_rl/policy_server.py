@@ -66,6 +66,8 @@ class CheckpointPolicy:
         self.global_step = int(ckpt.get("global_step", 0))
         self.memories: dict[str, AgentMemory] = {}
         self.n_act = 0
+        #: the intent in force, remembered between calls so a caller may send it only when it changes
+        self.intent: str | None = None
 
     def reset(self, agent_ids: list[str], teams: dict[str, str]) -> None:
         self.memories = {
@@ -73,16 +75,23 @@ class CheckpointPolicy:
             for aid in self.controlled
         }
         self.n_act = 0
+        self.intent = None
 
-    def act(self, t: float, obs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def act(
+        self, t: float, obs: dict[str, Any], intent: str | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         if not self.memories:
             self.reset(list(obs.keys()), {aid: o["self"]["team"] for aid, o in obs.items()})
+        if intent is not None:
+            self.intent = intent
         ids = [aid for aid in self.controlled if aid in obs]
         if not ids:
             return {}, {}
         x = np.zeros((len(ids), self.obs_dim), dtype=np.float32)
         for row, aid in enumerate(ids):
-            x[row, : self.featurizer.size] = self.featurizer.featurize(obs[aid], t, self.memories[aid], goal=self.goal)
+            x[row, : self.featurizer.size] = self.featurizer.featurize(
+                obs[aid], t, self.memories[aid], goal=self.goal, intent=self.intent
+            )
             if self.onehot_dim:
                 x[row, self.featurizer.size + self.controlled.index(aid)] = 1.0
         with torch.no_grad():
@@ -101,6 +110,8 @@ class CheckpointPolicy:
             actions[aid] = self.action_space.to_cpc_action(action_np[row], obs[aid]).to_json()
             desc = self.action_space.describe(action_np[row])
             desc["value"] = float(value[row])
+            if self.featurizer.config.intents:
+                desc["intent"] = self.intent
             debug[aid] = desc
         self.n_act += 1
         return actions, debug
@@ -123,7 +134,9 @@ def make_handler(policy: CheckpointPolicy, log_f: Any = None, deterministic: boo
                     }))
                 elif kind == "act":
                     t0 = time.perf_counter()
-                    actions, debug = policy.act(float(msg.get("t", 0.0)), dict(msg.get("obs") or {}))
+                    actions, debug = policy.act(
+                        float(msg.get("t", 0.0)), dict(msg.get("obs") or {}), msg.get("intent")
+                    )
                     ws.send(json.dumps({"type": "actions", "actions": actions, "policy": debug}))
                     if log_f is not None:
                         log_f.write(json.dumps({

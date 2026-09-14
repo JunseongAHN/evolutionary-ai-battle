@@ -98,6 +98,14 @@ class FeaturizerConfig:
     memory_decay_s: float = 10.0
     time_limit: float = 60.0
     goal: bool = False  # append the waypoint block (goal-conditioned policies); off keeps old checkpoints valid
+    # cover features, off by default for the same reason. `los` appends one flag per enemy slot
+    # ("is my line to it blocked"); `rays` appends N range readings around the agent (0 = no block).
+    # Both need a map with obstacles: on the bare field they would be constant.
+    los: bool = False
+    rays: int = 0
+    # The intents System 2 commits to. Empty keeps the old layout; when set, the vector ends with a
+    # one-hot of the intent in force, so one controller can be told what the fight is supposed to be.
+    intents: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -166,6 +174,12 @@ class Featurizer:
                 block(f"mem{i}", [f"mem{i}_{n}" for n in ("seen", "dx", "dy", "recency")])
         if c.goal:
             block("goal", [f"goal_{n}" for n in ("present", "dx", "dy", "dist", "ux", "uy")])
+        if c.los:
+            block("los", [f"los_en{i}" for i in range(c.max_enemies)])
+        if c.rays:
+            block("rays", [f"ray{i}" for i in range(c.rays)])
+        if c.intents:
+            block("intent", [f"intent_{name}" for name in c.intents])
         return keys, layout
 
     @property
@@ -196,6 +210,7 @@ class Featurizer:
         t: float = 0.0,
         memory: AgentMemory | None = None,
         goal: tuple[float, float] | None = None,
+        intent: str | None = None,
     ) -> np.ndarray:
         """``goal`` is the waypoint (world x, y) for the ``goal`` block; ignored unless ``config.goal``.
         When no explicit goal is given, the shared race point in ``obs["objective"]`` (if any) is used."""
@@ -303,14 +318,17 @@ class Featurizer:
                 out += [min(clip, float(e.get("count", 1)) / 30.0)]
             else:
                 out += [0.0] * 11
-        # -- obstacles (LOS / cover placeholders stay 0 until the map has cover)
+        # -- obstacles (`blocks_los` / `cover_score` come from the server's own bullet rule; both are
+        #    0 on a map without obstacles, which is what the open field is)
         obs_list = sorted(obs.get("obstacles") or [], key=lambda e: float(e.get("dist", 0.0)))
         for i in range(c.max_obstacles):
             if i < len(obs_list):
                 e = obs_list[i]
                 dx, dy, d, _, _ = rel(float(e["pos"]["x"]), float(e["pos"]["y"]), c.pos_scale)
                 out += [1.0, dx, dy, d, 1.0 if e.get("collidable") else 0.0,
-                        min(clip, float(e.get("scale", 1.0))), 0.0, 0.0]
+                        min(clip, float(e.get("scale", 1.0))),
+                        1.0 if e.get("blocks_los") else 0.0,
+                        min(1.0, max(0.0, float(e.get("cover_score") or 0.0)))]
             else:
                 out += [0.0] * 8
         # -- bullets
@@ -379,6 +397,17 @@ class Featurizer:
                 out += [1.0, gdx, gdy, gd, gux, guy]
             else:
                 out += [0.0] * 6
+        # -- cover: computed by the server with the engine's own bullet rule, so what the policy is
+        #    told about a blocked line is what a shot would actually do
+        if c.los:
+            for i in range(c.max_enemies):
+                out += [1.0 if i < len(ens) and ens[i].get("los_blocked") else 0.0]
+        if c.rays:
+            rays = obs.get("rays") or []
+            for i in range(c.rays):
+                out += [min(clip, float(rays[i]) / c.pos_scale) if i < len(rays) else 0.0]
+        if c.intents:
+            out += [1.0 if intent == name else 0.0 for name in c.intents]
         vec = np.asarray(out, dtype=np.float32)
         if vec.shape[0] != self.size:  # pragma: no cover - layout guard
             raise RuntimeError(f"featurizer produced {vec.shape[0]} values, expected {self.size}")

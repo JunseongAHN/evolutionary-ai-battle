@@ -240,7 +240,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoint", default=None, help="checkpoint .pt (omit with --policy random)")
     p.add_argument("--policy", default="checkpoint", choices=["checkpoint", "random"])
     p.add_argument("--deterministic", action="store_true", help="argmax actions instead of sampling")
-    p.add_argument("--bridge", default=DEFAULT_BRIDGE_URL)
+    p.add_argument("--bridge", default=DEFAULT_BRIDGE_URL,
+                   help="bridge WebSocket URL, or several comma-separated")
     p.add_argument("--mock", action="store_true")
     p.add_argument("--episodes", type=int, default=20)
     p.add_argument("--n-envs", type=int, default=1)
@@ -250,6 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--time-limit", type=float, default=None)
     p.add_argument("--loadout", default=None, choices=["fists", "armed"], help="override the checkpoint's loadout")
     p.add_argument("--layout", default=None, choices=["fixed", "random"], help="override the checkpoint's spawn layout")
+    p.add_argument("--cover", default=None, choices=["none", "sparse", "default", "dense"],
+                   help="override the checkpoint's cover density (default: whatever it trained on)")
+    p.add_argument("--intent", default=None,
+                   help="hold one intent for every episode instead of drawing per episode; "
+                        "this is how a single intent (e.g. hold_angle) gets measured on its own")
     p.add_argument("--opp-aim-noise", type=float, default=None, help="override the opponents' aim noise (degrees)")
     p.add_argument("--opp-reaction", type=float, default=None, help="override the opponents' reaction delay (s)")
     p.add_argument("--opp-engage-dist", type=float, default=None, help="override the racer's engage distance (u)")
@@ -308,6 +314,10 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         map_size=int(env_meta.get("map_size", 128)),
         loadout=args.loadout or str(env_meta.get("loadout", "fists")),
         layout=args.layout or str(env_meta.get("layout", "fixed")),
+        cover=args.cover or str(env_meta.get("cover", "none")),
+        # --intent holds one intent for every episode: that is how a single intent gets measured on
+        # its own, and how "does the controller obey at all" is asked (four evals, four signatures)
+        intents=(args.intent,) if args.intent else tuple(env_meta.get("intents") or ()),
         goal=tuple(env_meta["goal"]) if env_meta.get("goal") else None,
         objective=env_meta.get("objective"),
         end_on_elimination=bool(env_meta.get("end_on_elimination", True)),

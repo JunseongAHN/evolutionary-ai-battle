@@ -59,6 +59,7 @@ COMPONENT_KEYS: tuple[str, ...] = (
     "partner_hp",
     "partner_alive",
     "cover",
+    "intent",
     "time",
     "goal_progress",
     "goal_hold",
@@ -81,6 +82,14 @@ class RewardConfig:
     partner_hp_delta: float = 0.0
     partner_alive_per_step: float = 0.0
     cover_bonus: float = 0.0
+    #: how close an armed enemy must be for `retreat` to count as still in contact (world units)
+    retreat_contact_dist: float = 25.0
+    #: how far from the play area's centre `retreat` may go before it starts costing (world units);
+    #: 0 disables the leash
+    retreat_leash_radius: float = 45.0
+    #: weight of the per-intent shaping term (see ``_intent_term``); 0 keeps every intent identical,
+    #: which is what v1 did — and why "retreat" produced the fastest wipes in the intent evaluation
+    intent_bonus: float = 0.0
     time_penalty_after_s: float = 0.0  # 0 = disabled
     time_penalty_per_step: float = 0.0  # applied per step once t > time_penalty_after_s
     goal_progress: float = 0.0  # per world unit of distance-to-goal removed (standing agents only)
@@ -130,8 +139,151 @@ def hp_delta_corrected(prev: Mapping[str, Any], cur: Mapping[str, Any]) -> float
 
 
 def _cover_term(obs: AgentObservation) -> float:
-    """Placeholder for cover/LOS shaping; returns 0 until obstacle features are real."""
-    return 0.0
+    """Exposure while you cannot shoot back, as a signed shaping term in [-1, 1].
+
+    -1 while an armed enemy has a clear line and the gun in hand is empty: reloading in the open is
+    what the first playtest died of. +1 while a fight is on and every armed enemy's line is broken.
+    0 when no armed enemy is in view, so walking an empty map pays nothing.
+
+    Line of sight is the server's, computed with the engine's own bullet rule, so this cannot reward
+    hiding behind something a bullet goes through. Pair it with ``damage_dealt``: on its own a policy
+    learns that sitting behind a wall is free.
+    """
+    me = obs.get("self") or {}
+    armed_enemies = [
+        p for p in (obs.get("players") or [])
+        if not p.get("dead") and not p.get("downed")
+        and str(p.get("weapon") or "fists") not in ("", "fists")
+    ]
+    if not armed_enemies:
+        return 0.0
+    if all(p.get("los_blocked") for p in armed_enemies):
+        return 1.0
+    return -1.0 if int(me.get("clip", 0) or 0) == 0 else 0.0
+
+
+#: What each reward term is worth under each intent.
+#:
+#: Two intents, because two is what the controller can actually express. `push`, `hold_angle` and
+#: `trade` were tried for three seeds each, priced first through an added shaping term and then by
+#: scaling these same weights up to six-fold apart: the three came out within 0.2 damage of each
+#: other every time. Fights here last five to seven seconds — both sides hit from the first tick —
+#: so there is no room for a stance to matter. `retreat` separates because it is the one intent that
+#: changes how long the fight lasts at all.
+#:
+#: `engage` is absent on purpose: every term keeps its weight, so engaging is simply the normal
+#: reward. Under `retreat` nothing about winning pays, and the per-step term for a broken line of
+#: sight (``_intent_term``) is the only score.
+#: What each combat term is worth under each intent. Naming an intent does not give it meaning --
+#: the reward does, and the reward has to make the intent's optimum *different*, not merely cheaper.
+#:
+#: v7 zeroed `kill` for `retreat` and the two intents still collapsed into one behaviour (seed 1 was
+#: identical: 0.82 win / 13.0 s / 0.82 kills either way). Zero is not enough, because killing is
+#: still the surest way to stop `damage_taken`: the agent was paid for withdrawing and wiped the
+#: enemy anyway, since that is what the shared network's engage solution does and nothing opposed it.
+#:
+#: So the two scales below have to be read together. `kill` is negative -- a withdrawal that ends in
+#: a wipe was not a withdrawal -- and `damage_taken` is doubled, because being hit is how withdrawing
+#: fails. Either one alone backfires: doubling `damage_taken` on its own makes killing *more*
+#: attractive (it is the fastest way to stop the bleeding), and a negative `kill` on its own leaves
+#: standing in the open costless. Together the only route left is to break contact and stay
+#: un-shootable, which is what `_intent_term` pays for.
+INTENT_SCALE: dict[str, dict[str, float]] = {
+    "retreat": {
+        "kill": -1.0,
+        "damage_dealt": 0.0,
+        "team_win": 0.0,
+        "time": 0.0,
+        "damage_taken": 2.0,
+    },
+}
+
+
+def _scale(intent: str | None, term: str) -> float:
+    """Weight multiplier for one term under one intent; 1.0 when the intent leaves it alone."""
+    return INTENT_SCALE.get(intent or "", {}).get(term, 1.0)
+
+#: the band `hold_angle` is asked to keep (world units)
+HOLD_BAND = (12.0, 25.0)
+
+
+def _armed_enemies(obs: AgentObservation) -> list[Mapping[str, Any]]:
+    return [
+        p for p in (obs.get("players") or [])
+        if not p.get("dead") and not p.get("downed")
+        and str(p.get("weapon") or "fists") not in ("", "fists")
+    ]
+
+
+def _nearest_armed_dist(obs: AgentObservation) -> float | None:
+    enemies = _armed_enemies(obs)
+    return min(float(p.get("dist", 0.0)) for p in enemies) if enemies else None
+
+
+def _leash_penalty(obs: AgentObservation, radius: float) -> float:
+    """How far outside the play area the agent has wandered, as a penalty in [0, 1].
+
+    The centre comes from ``gas.pos``, which the server already sends. In these scenarios the circle
+    has not started closing (``mode`` 0, ``rad`` ~196), so its radius says nothing useful — but its
+    centre is the play area's, which is all the leash needs and is one less constant to hardcode.
+    An observation without a gas field (unit fixtures) simply has no leash.
+    """
+    if radius <= 0.0:
+        return 0.0
+    centre = (obs.get("gas") or {}).get("pos")
+    me = (obs.get("self") or {}).get("pos")
+    if not centre or not me:
+        return 0.0
+    d = math.hypot(
+        float(me.get("x", 0.0)) - float(centre.get("x", 0.0)),
+        float(me.get("y", 0.0)) - float(centre.get("y", 0.0)),
+    )
+    return min(1.0, max(0.0, (d - radius) / radius))
+
+
+def _intent_term(
+    intent: str | None,
+    prev: AgentObservation,
+    cur: AgentObservation,
+    dealt: float,
+    taken: float,
+    *,
+    contact_dist: float = 25.0,
+    leash_radius: float = 45.0,
+) -> float:
+    """What `retreat` asks for this step, in [-1, 1]. Only `retreat` has a shaping term.
+
+    **Withdrawing means becoming un-shootable, not becoming invisible.** The term pays +1 while an
+    armed enemy is still within ``contact_dist`` *and* every one of them has its line broken — the
+    server's own bullet rule, so nothing here credits hiding behind something a shot goes through.
+    That predicate is exactly the one the game's heal mask uses to decide whether healing is
+    suicide, so scoring it and "reaching a state where you can heal or reload" are the same thing.
+
+    Leaving pays nothing, and wandering out of the play area costs (``_leash_penalty``).
+
+    This replaces the v5/v6 term, which paid +1 whenever no armed enemy was in view. 64-85% of
+    retreat steps satisfied that, so essentially the whole retreat reward came from the enemy not
+    being rendered, and breaking a line while in contact earned 0 in six training runs out of six.
+    The cheapest way to collect it was to run until the enemy stopped being drawn: all three seeds
+    of both generations ended up against the map edge (median x = 1 of a 128-wide map) with no
+    obstacle in view and an armed enemy still 22 m away. Cornered, not escaped.
+    """
+    if intent != "retreat":
+        return 0.0
+    enemies = _armed_enemies(cur)
+    near = _nearest_armed_dist(cur)
+    in_contact = near is not None and near <= contact_dist
+    # Two ways to withdraw, worth the same, so the policy may pick whichever the ground allows:
+    #   * still in the fight but un-shootable -- every armed enemy's line broken;
+    #   * out of the fight -- an armed enemy still in view, but none of them inside contact_dist.
+    # The second one only became reachable when the scripted bots stopped being omniscient; paying
+    # for it while it was impossible is why v7/v8 could only learn the first.
+    safe = in_contact and all(p.get("los_blocked") for p in enemies)
+    broke_off = bool(enemies) and not in_contact
+    # `not enemies` deliberately pays nothing: v5/v6 paid +1 whenever no armed enemy was in view,
+    # 64-85% of retreat steps met it, and running until the enemy stopped being drawn was the result.
+    earned = 1.0 if (safe or broke_off) else 0.0
+    return max(-1.0, min(1.0, earned - _leash_penalty(cur, leash_radius)))
 
 
 def has_gun(state: Mapping[str, Any]) -> bool:
@@ -180,8 +332,13 @@ def compute_reward_components(
     controlled: Sequence[str] | None = None,
     t: float | None = None,
     goal: tuple[float, float] | None = None,
+    intent: str | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Signed reward components per controlled agent (before ``team_mix``)."""
+    """Signed reward components per controlled agent (before ``team_mix``).
+
+    ``intent`` is the commitment the episode is playing under: it pays for what its name claims and
+    scales the combat terms by ``INTENT_COMBAT_SCALE``.
+    """
     if isinstance(info, ObsInfo):
         winner, reason = info.winner_team, info.reason
     else:
@@ -224,16 +381,16 @@ def compute_reward_components(
                     deaths += 1
                 elif e.get("source") == aid and team_of.get(victim, "") != team:
                     kills += 1
-        comp["damage_dealt"] = config.damage_dealt * dealt
-        comp["damage_taken"] = config.damage_taken * taken
-        comp["kill"] = config.kill * kills
+        comp["damage_dealt"] = config.damage_dealt * dealt * _scale(intent, "damage_dealt")
+        comp["damage_taken"] = config.damage_taken * taken * _scale(intent, "damage_taken")
+        comp["kill"] = config.kill * kills * _scale(intent, "kill")
         comp["death"] = config.death * deaths
         comp["capture"] = config.capture * captures
         comp["enemy_capture"] = config.enemy_capture * enemy_captures
         if config.gun_pickup != 0.0 and has_gun(me) and not has_gun(me_prev) and not me.get("dead"):
             comp["gun_pickup"] = config.gun_pickup
         if done and winner is not None and winner == team:
-            comp["team_win"] = config.team_win
+            comp["team_win"] = config.team_win * _scale(intent, "team_win")
         partner, partner_prev = _partner_entry(cur), _partner_entry(prev)
         if partner is not None:
             if partner_prev is not None:
@@ -241,13 +398,23 @@ def compute_reward_components(
             if not partner.get("dead"):
                 comp["partner_alive"] = config.partner_alive_per_step
         comp["cover"] = config.cover_bonus * _cover_term(cur)
+        if config.intent_bonus != 0.0 and not me.get("dead"):
+            comp["intent"] = config.intent_bonus * _intent_term(
+                intent,
+                prev,
+                cur,
+                dealt,
+                taken,
+                contact_dist=config.retreat_contact_dist,
+                leash_radius=config.retreat_leash_radius,
+            )
         if (
             config.time_penalty_after_s > 0.0
             and t is not None
             and t > config.time_penalty_after_s
             and not me.get("dead")
         ):
-            comp["time"] = config.time_penalty_per_step
+            comp["time"] = config.time_penalty_per_step * _scale(intent, "time")
         if goal is not None:
             standing = not me.get("dead") and not me.get("downed")
             if standing and not me_prev.get("dead") and not me_prev.get("downed"):
@@ -297,8 +464,9 @@ def compute_reward_breakdown(
     controlled: Sequence[str] | None = None,
     t: float | None = None,
     goal: tuple[float, float] | None = None,
+    intent: str | None = None,
 ) -> RewardBreakdown:
-    components = compute_reward_components(prev_obs, obs, events, info, config, controlled, t, goal)
+    components = compute_reward_components(prev_obs, obs, events, info, config, controlled, t, goal, intent)
     totals = {aid: float(sum(c.values())) for aid, c in components.items()}
     teams = {aid: str(obs[aid]["self"].get("team", "")) for aid in components}
     return RewardBreakdown(components=components, totals=mix_team_rewards(totals, teams, config.team_mix))

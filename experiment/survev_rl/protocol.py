@@ -268,6 +268,7 @@ class PlayerView(TypedDict):
     downed: bool
     dead: bool
     weapon: str
+    los_blocked: bool  # a shot at it would hit something else first
 
 
 class LootView(TypedDict):
@@ -286,6 +287,17 @@ class ObstacleView(TypedDict):
     collidable: bool
     height: float
     scale: float
+    blocks_los: bool  # it sits on the line to the nearest standing enemy
+    cover_score: float  # 1 when stepping behind it would break that line
+
+
+class BuildingView(TypedDict):
+    """A whole structure. Its walls also arrive as obstacles; this is the thing a decision can name."""
+
+    id: int
+    type: str
+    pos: Vec2
+    dist: float
 
 
 class BulletView(TypedDict):
@@ -340,6 +352,8 @@ class AgentObservation(TypedDict, total=False):
     alive_teams: int
     objective: ObjectiveView | None  # race mode only; null / absent otherwise
     shots_heard: list[ShotHeard]  # other players' shots of the step; heard-only, not featurized
+    buildings: list[BuildingView]  # only on a map with structures; absent on the open field
+    rays: list[float]  # distance to the first bullet-stopper per direction, E first, counter-clockwise
 
 
 # Allowlist (M6). Keys not listed here make ``validate_agent_observation`` raise.
@@ -353,6 +367,7 @@ ALLOWED_KEYS: dict[str, frozenset[str]] = {
     "players[]": frozenset(PlayerView.__annotations__),
     "loot[]": frozenset(LootView.__annotations__),
     "obstacles[]": frozenset(ObstacleView.__annotations__),
+    "buildings[]": frozenset(BuildingView.__annotations__),
     "bullets[]": frozenset(BulletView.__annotations__),
     "dead_bodies[]": frozenset(DeadBodyView.__annotations__),
     "gas": frozenset(GasView.__annotations__),
@@ -365,12 +380,16 @@ _VEC2_FIELDS: dict[str, tuple[str, ...]] = {
     "players[]": ("pos", "dir"),
     "loot[]": ("pos",),
     "obstacles[]": ("pos",),
+    "buildings[]": ("pos",),
     "bullets[]": ("pos", "dir"),
     "dead_bodies[]": ("pos",),
     "gas": ("pos", "pos_new"),
     "shots_heard[]": (),
 }
-_LIST_FIELDS = ("teammates", "players", "loot", "obstacles", "bullets", "dead_bodies", "shots_heard")
+# `rays` is a list of numbers, not of objects, so it is not walked here — only its name is allowlisted
+_LIST_FIELDS = (
+    "teammates", "players", "loot", "obstacles", "buildings", "bullets", "dead_bodies", "shots_heard",
+)
 
 
 def _check_keys(obj: Mapping[str, Any], allowed: frozenset[str], where: str) -> None:

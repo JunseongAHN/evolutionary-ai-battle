@@ -145,3 +145,108 @@ def test_race_objective_end_to_end_on_mock(mock_server):
         assert env.last_messages[0].info.objective["captures"]["team-a"] == 1
     finally:
         env.close()
+
+
+def test_cover_option_travels_to_the_bridge(mock_server):
+    """The scenario option the cover work added: the env has to pass it, the bridge to accept it."""
+    env = SurvevVecEnv(mock_server.url, n_envs=1, controlled=("team-a-0",), ticks=10, base_seed=1,
+                       cover="default")
+    try:
+        assert env.cover == "default"
+        obs = env.reset()  # the mock field has no obstacles; it accepts the option for parity
+        assert obs.shape[0] == 1
+    finally:
+        env.close()
+
+
+def test_an_unknown_cover_is_refused(mock_server):
+    env = SurvevVecEnv(mock_server.url, n_envs=1, controlled=("team-a-0",), ticks=10, base_seed=1,
+                       cover="plenty")
+    try:
+        with pytest.raises(Exception, match="cover"):
+            env.reset()
+    finally:
+        env.close()
+
+
+def test_make_vec_env_carries_the_cover_setting(mock_server):
+    env = make_vec_env(EnvConfig(bridge_url=mock_server.url, n_envs=1, controlled=("team-a-0",),
+                                 cover="sparse"))
+    try:
+        assert env.cover == "sparse"
+    finally:
+        env.close()
+
+
+def test_several_bridges_give_the_same_episodes_as_one(mock_server):
+    """Spreading envs over bridges is a speed change, not a semantics change.
+
+    The step loop is the heart of the env: a mistake here corrupts training data silently, so the
+    same seeds are run through one bridge and through two and the observations have to match.
+    """
+    def run(url: str) -> list:
+        env = SurvevVecEnv(url, n_envs=2, controlled=("team-a-0",), ticks=10, base_seed=3)
+        try:
+            frames = [env.reset().copy()]
+            rng = np.random.default_rng(0)
+            for _ in range(5):
+                actions = np.stack([env.action_space.sample(rng) for _ in range(env.n_rows)])
+                obs, rewards, dones, _ = env.step(actions)
+                frames.append(obs.copy())
+                frames.append(rewards.copy())
+            return frames
+        finally:
+            env.close()
+
+    one = run(mock_server.url)
+    two = run(f"{mock_server.url},{mock_server.url}")
+    assert len(one) == len(two)
+    for a, b in zip(one, two):
+        assert np.allclose(a, b), "two bridges produced a different episode"
+
+
+def test_each_bridge_gets_its_share_of_the_envs(mock_server):
+    env = SurvevVecEnv(f"{mock_server.url},{mock_server.url},{mock_server.url}",
+                       n_envs=5, controlled=("team-a-0",), ticks=10)
+    try:
+        assert len(env.clients) == 3
+        assert env._client_of == [0, 1, 2, 0, 1]
+    finally:
+        env.close()
+
+
+def test_the_bridges_are_stepped_at_the_same_time(mock_server):
+    """Correctness alone let a useless version through: four bridges called one after another are as
+    slow as one (measured 811 vs 963 steps/s), and the equality test still passed. So this checks the
+    calls overlap, not just that the numbers match."""
+    import threading
+    import time
+
+    env = SurvevVecEnv(f"{mock_server.url},{mock_server.url}", n_envs=2, controlled=("team-a-0",), ticks=10)
+    try:
+        env.reset()
+        overlap = {"max": 0}
+        live = {"n": 0}
+        lock = threading.Lock()
+        real = [client.step_batch for client in env.clients]
+
+        def wrap(index):
+            def step(share):
+                with lock:
+                    live["n"] += 1
+                    overlap["max"] = max(overlap["max"], live["n"])
+                try:
+                    time.sleep(0.05)  # hold the "request" open long enough for the other to start
+                    return real[index](share)
+                finally:
+                    with lock:
+                        live["n"] -= 1
+            return step
+
+        for i, client in enumerate(env.clients):
+            client.step_batch = wrap(i)
+        rng = np.random.default_rng(0)
+        env.step(np.stack([env.action_space.sample(rng) for _ in range(env.n_rows)]))
+        assert overlap["max"] == 2, "the two bridges were stepped one after the other"
+    finally:
+        env.close()

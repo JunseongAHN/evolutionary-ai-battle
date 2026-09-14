@@ -29,7 +29,9 @@ from .rewards import RewardConfig
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="PPO training for survev duo2v2_field.")
     # bridge / env
-    p.add_argument("--bridge", default=DEFAULT_BRIDGE_URL, help="bridge WebSocket URL")
+    p.add_argument("--bridge", default=DEFAULT_BRIDGE_URL,
+                   help="bridge WebSocket URL, or several comma-separated. A bridge runs its games "
+                        "on one core, so the wall clock scales with the number of bridges, not the GPU")
     p.add_argument("--mock", action="store_true", help="start the mock bridge in a thread and use it")
     p.add_argument("--mock-port", type=int, default=0, help="port for --mock (0 = free port)")
     p.add_argument("--n-envs", type=int, default=16)
@@ -43,6 +45,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="curriculum: 'armed' spawns everyone with an ak47 (mock; bridge extension request)")
     p.add_argument("--layout", default="fixed", choices=["fixed", "random"],
                    help="spawn geometry: 'random' rotates the spawn axis and draws the distance per seed (bridge)")
+    p.add_argument("--cover", default="none", choices=["none", "sparse", "default", "dense"],
+                   help="bullet-stopping cover between the duos (real bridge only; the mock field is bare)")
+    p.add_argument("--intents", default="",
+                   help="comma-separated intents the controller is trained to obey, e.g. "
+                        "push,hold_angle,trade,retreat; one is drawn per episode and appended to the "
+                        "observation as a one-hot. Empty = the policy fights however it likes")
+    p.add_argument("--los", action="store_true",
+                   help="add one line-of-sight flag per enemy slot (only means something with cover)")
+    p.add_argument("--rays", type=int, default=0,
+                   help="range readings around the agent (16 = one every 22.5 degrees)")
     p.add_argument("--goal", default=None,
                    help="waypoint 'x,y' or 'center' (132,132); adds the goal block to the observation and enables "
                         "the waypoint reward terms in --reward-json (goal_progress / goal_hold / enemy_at_goal)")
@@ -160,6 +172,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         map_size=args.map_size,
         loadout=args.loadout,
         layout=args.layout,
+        cover=args.cover,
+        intents=tuple(i for i in args.intents.split(",") if i),
         goal=parse_goal(args.goal),
         objective=parse_objective(args),
         end_on_elimination=args.objective == "none" or args.end_on_elimination,
@@ -170,6 +184,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     feat_cfg = FeaturizerConfig(
         rotate_to_facing=args.rotate_obs, memory=not args.no_memory, time_limit=args.time_limit,
         goal=env_cfg.goal is not None or env_cfg.objective is not None,
+        los=args.los, rays=args.rays,
+        intents=tuple(i for i in args.intents.split(",") if i),
     )
     action_space = ActionSpace(
         mode="primitive", assist=not args.no_assist, auto_pickup=args.auto_pickup, aim_assist=args.aim_assist

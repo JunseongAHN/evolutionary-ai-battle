@@ -115,3 +115,25 @@ def test_obs_message_and_metrics_parsing(spec_obs):
         P.parse_response({"type": "closed", "env_id": 0})
     batch = P.parse_batch_response({"type": "obs_batch", "envs": {"0": msg}})
     assert set(batch) == {0} and batch[0].tick == 350
+
+
+def test_cover_observation_keys_are_allowed():
+    """The keys the cover work added: line of sight, cover readings, buildings, range readings."""
+    from experiment.survev_rl.protocol import ProtocolError, validate_agent_observation
+
+    obs = {
+        "players": [{"id": "team-b-0", "team": "team-b", "pos": {"x": 1.0, "y": 2.0}, "dist": 9.0,
+                     "dir": {"x": 1.0, "y": 0.0}, "downed": False, "dead": False, "weapon": "ak47",
+                     "los_blocked": True}],
+        "obstacles": [{"id": 3, "type": "stone_01", "pos": {"x": 4.0, "y": 5.0}, "dist": 6.0,
+                       "collidable": True, "height": 0.5, "scale": 1.0,
+                       "blocks_los": True, "cover_score": 1.0}],
+        "buildings": [{"id": 7, "type": "shack_01", "pos": {"x": 8.0, "y": 9.0}, "dist": 20.0}],
+        "rays": [48.0] * 16,
+    }
+    validate_agent_observation(obs)  # does not raise
+
+    import pytest
+
+    with pytest.raises(ProtocolError, match="unknown keys"):
+        validate_agent_observation({**obs, "buildings": [{**obs["buildings"][0], "colour": "red"}]})

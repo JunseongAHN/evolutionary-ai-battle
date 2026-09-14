@@ -343,6 +343,10 @@ class FieldSim:
         self.layout = str(options.get("layout", "fixed"))  # accepted for parity; the mock keeps its fixed geometry
         if self.layout not in ("fixed", "random"):
             raise ProtocolError(f"unknown layout {self.layout!r}")
+        # accepted for parity; the mock field has no obstacles, so cover changes nothing here
+        self.cover = str(options.get("cover", "none"))
+        if self.cover not in ("none", "sparse", "default", "dense"):
+            raise ProtocolError(f"unknown cover {self.cover!r}")
         objective = dict(options.get("objective") or {"mode": "none"})
         if objective.get("mode", "none") not in ("none", "race"):
             raise ProtocolError(f"unknown objective mode {objective.get('mode')!r}")
